@@ -1,0 +1,65 @@
+{
+  "manifest_version": 3,
+  "name": "HRM Recruitment Assistant",
+  "version": "1.0.0",
+  "description": "Chrome and Edge extension to interact with HRM Recruitment pages and candidate data.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "64": "icons/icon-64.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "HRM Assistant",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "64": "icons/icon-64.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://hrm.ltsgroup.tech/*"
+      ],
+      "js": [
+        "content/bridge.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://hrm.ltsgroup.tech/*"
+      ],
+      "js": [
+        "content/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "icons/*",
+        "content/content.css"
+      ],
+      "matches": [
+        "https://hrm.ltsgroup.tech/*"
+      ]
+    }
+  ],
+  "permissions": [
+    "storage",
+    "activeTab",
+    "webNavigation",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://hrm.ltsgroup.tech/*"
+  ]
+}

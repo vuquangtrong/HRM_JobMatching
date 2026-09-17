@@ -1,0 +1,408 @@
+/* HRM Extension Floating Indicator & Drawer Styles (Shadow DOM) */
+#hrm-ext-floating-root {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 2147483647;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  user-select: none;
+}
+
+#hrm-ext-floating-btn {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.1);
+  border: 2px solid #2563eb;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease, border-color 0.2s ease;
+  position: relative;
+  outline: none;
+  padding: 0;
+}
+
+#hrm-ext-floating-btn:hover {
+  transform: scale(1.08);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+#hrm-ext-floating-btn:active {
+  transform: scale(0.95);
+}
+
+#hrm-ext-floating-btn img {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  pointer-events: none;
+  display: block;
+}
+
+/* Status Indicator Dot */
+#hrm-ext-status-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  background-color: #94a3b8; /* Neutral Gray: idle */
+  box-sizing: content-box;
+  transition: background-color 0.3s ease;
+}
+
+#hrm-ext-status-dot.idle,
+#hrm-ext-status-dot.ready {
+  background-color: #94a3b8; /* Neutral Gray: idle / ready */
+}
+
+#hrm-ext-status-dot.loading {
+  background-color: #f59e0b; /* Amber */
+  animation: hrm-ext-pulse 1s infinite alternate;
+}
+
+#hrm-ext-status-dot.active {
+  background-color: #3b82f6; /* Blue: Job Request detected */
+}
+
+#hrm-ext-status-dot.success {
+  background-color: #10b981; /* Green: Loaded successfully */
+}
+
+#hrm-ext-status-dot.error {
+  background-color: #ef4444; /* Red: Error */
+}
+
+@keyframes hrm-ext-pulse {
+  from { transform: scale(0.85); opacity: 0.7; }
+  to { transform: scale(1.2); opacity: 1; }
+}
+
+/* Candidate count badge on floating button */
+#hrm-ext-badge-count {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 9999px;
+  border: 1.5px solid #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  display: none;
+  pointer-events: none;
+}
+
+#hrm-ext-badge-count.visible {
+  display: inline-block;
+}
+
+/* Floating Tooltip */
+#hrm-ext-tooltip {
+  position: absolute;
+  right: 58px;
+  top: 50%;
+  transform: translateY(-50%) translateX(8px);
+  background: rgba(17, 24, 39, 0.92);
+  color: #ffffff;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+#hrm-ext-floating-root:hover #hrm-ext-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(-50%) translateX(0);
+}
+
+/* Slide-out drawer when icon is clicked */
+#hrm-ext-drawer {
+  position: absolute;
+  bottom: 60px;
+  right: 0;
+  width: 520px;
+  max-width: 90vw;
+  height: 560px;
+  max-height: 85vh;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.08);
+  border: 1px solid #e2e8f0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(12px) scale(0.96);
+  transition: opacity 0.25s ease, transform 0.25s ease, visibility 0.25s, width 0.25s ease, height 0.25s ease;
+  z-index: 2147483647;
+}
+
+#hrm-ext-drawer.open {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0) scale(1);
+}
+
+/* Full Page Resized State */
+#hrm-ext-drawer.full-page {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  width: calc(100vw - 32px);
+  height: calc(100vh - 32px);
+  max-width: none;
+  max-height: none;
+  border-radius: 12px;
+  transform: none;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+/* Header */
+.hrm-ext-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+  gap: 12px;
+}
+
+.hrm-ext-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e293b;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.hrm-ext-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hrm-ext-header-btn {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  font-size: 12px;
+  color: #475569;
+  cursor: pointer;
+  line-height: 1;
+  padding: 5px 8px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+
+.hrm-ext-header-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+  border-color: #94a3b8;
+}
+
+.hrm-ext-btn-fetch {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #1d4ed8;
+  font-weight: 600;
+  font-size: 11px;
+  padding: 5px 10px;
+}
+
+.hrm-ext-btn-fetch:hover {
+  background: #1d4ed8;
+  color: #ffffff;
+}
+
+.hrm-ext-expand-btn {
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.hrm-ext-close-btn {
+  font-size: 16px;
+  padding: 4px 7px;
+}
+
+/* Body */
+.hrm-ext-body {
+  padding: 14px 16px;
+  overflow-y: auto;
+  overflow-x: auto;
+  font-size: 13px;
+  color: #334155;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.hrm-ext-field {
+  margin-bottom: 6px;
+}
+
+.hrm-ext-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 2px;
+}
+
+.hrm-ext-field-value {
+  font-size: 12px;
+  color: #0f172a;
+  word-break: break-word;
+}
+
+/* Badges */
+.hrm-ext-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 9999px;
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+/* Table Styles for Candidates Data */
+.hrm-ext-table-container {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.hrm-ext-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 12px;
+}
+
+.hrm-ext-table th {
+  background: #f8fafc;
+  color: #475569;
+  font-weight: 600;
+  padding: 9px 12px;
+  border-bottom: 2px solid #e2e8f0;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.hrm-ext-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid #f1f5f9;
+  color: #1e293b;
+  vertical-align: middle;
+}
+
+.hrm-ext-table tr:last-child td {
+  border-bottom: none;
+}
+
+.hrm-ext-table tr:hover td {
+  background-color: #f8fafc;
+}
+
+.hrm-ext-table .cand-name-col {
+  font-weight: 600;
+  color: #0f172a;
+  white-space: nowrap;
+}
+
+.hrm-ext-table .cand-code-col {
+  font-weight: 600;
+  color: #2563eb;
+  white-space: nowrap;
+}
+
+.hrm-ext-table .cand-text-col {
+  white-space: nowrap;
+  color: #475569;
+}
+
+.hrm-ext-cv-btn {
+  text-decoration: none;
+}
+
+/* Tabs */
+.hrm-ext-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 6px;
+}
+
+.hrm-ext-tab-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.hrm-ext-tab-btn:hover {
+  background: #f1f5f9;
+  color: #1e293b;
+}
+
+.hrm-ext-tab-btn.active {
+  background: #eff6ff;
+  color: #2563eb;
+  border-color: #bfdbfe;
+}
+
+/* JSON Viewer */
+.hrm-ext-json-box {
+  background: #090d16;
+  color: #38bdf8;
+  padding: 12px;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border: 1px solid #1e293b;
+}
+
+#hrm-ext-drawer.full-page .hrm-ext-json-box {
+  max-height: 600px;
+}
