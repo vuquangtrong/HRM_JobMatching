@@ -66,7 +66,7 @@
 
   // Drawer Navigation State
   let mainPage = 'active'; // 'active' | 'jobs' | 'search' | 'settings'
-  let activeTabName = 'table'; // 'table' | 'spec' | 'json' for active page
+  let activeTabName = 'candidates'; // 'candidates' | 'jobDetails' for active page
 
   // Backend Sync & Cache State
   let backendSyncStatus = { synced: false, time: null, error: null, count: 0, newCount: 0, updatedCount: 0 };
@@ -221,28 +221,34 @@
    */
   function renderMatchPercent(pct) {
     const val = typeof pct === 'number' ? pct : parseFloat(pct) || 0;
-    let barColor = '#94a3b8';
-    let textColor = '#475569';
+    let toneClass = 'is-neutral';
 
     if (val >= 75) {
-      barColor = '#10b981';
-      textColor = '#047857';
+      toneClass = 'is-high';
     } else if (val >= 50) {
-      barColor = '#3b82f6';
-      textColor = '#1d4ed8';
+      toneClass = 'is-mid';
     } else if (val >= 30) {
-      barColor = '#f59e0b';
-      textColor = '#b45309';
+      toneClass = 'is-low';
     }
+
+    const width = Math.min(100, Math.max(5, val));
 
     return `
       <div class="hrm-ext-match-box">
-        <span class="hrm-ext-match-text" style="color: ${textColor};">${val.toFixed(1)}%</span>
+        <span class="hrm-ext-match-text ${toneClass}">${val.toFixed(1)}%</span>
         <div class="hrm-ext-progress-bg">
-          <div class="hrm-ext-progress-fill" style="width: ${Math.min(100, Math.max(5, val))}%; background: ${barColor};"></div>
+          <div class="hrm-ext-progress-fill ${toneClass}" data-pct="${width.toFixed(2)}"></div>
         </div>
       </div>
     `;
+  }
+
+  function applyMatchProgressWidths(container) {
+    const bars = container.querySelectorAll('.hrm-ext-progress-fill[data-pct]');
+    bars.forEach((bar) => {
+      const width = parseFloat(bar.dataset.pct || '0');
+      bar.style.width = `${width}%`;
+    });
   }
 
   /**
@@ -335,7 +341,7 @@
     if (!Array.isArray(cvUrls) || cvUrls.length === 0) return '';
     return cvUrls.map((url, i) => {
       const label = cvUrls.length === 1 ? 'CV' : `CV ${i + 1}`;
-      return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="hrm-ext-cv-btn" title="Open CV document">${label}</a>`;
+      return `<a href="${escapeHtml(url)}" target="_blank" class="hrm-ext-cv-link" rel="noopener noreferrer" title="Open CV document">${label}</a>`;
     }).join(' ');
   }
 
@@ -348,25 +354,26 @@
     const candsCount = extractedData?.candidates?.length || 0;
     const reqTitle = extractedData?.jobRequest?.title || '';
 
-    let html = `
-      <div style="background: #f8fafc; padding: 10px 14px; border-radius: 8px; border: 1px solid #e2e8f0; display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
-        ${reqTitle ? `
-        <div class="hrm-ext-field" style="margin-bottom: 0;">
+    let html = '';
+
+    if (reqTitle) {
+      html += `
+        <div class="hrm-ext-panel-soft hrm-ext-panel-soft-compact hrm-ext-mb-md">
           <div class="hrm-ext-field-label">Job Title</div>
-          <div class="hrm-ext-field-value" style="font-size: 13px; font-weight: 700; color: #1e293b;">${escapeHtml(reqTitle)}</div>
-        </div>` : ''}
-      </div>
-    `;
+          <div class="hrm-ext-field-value hrm-ext-title-md">${escapeHtml(reqTitle)}</div>
+        </div>
+      `;
+    }
 
     if (extractedData) {
       html += `
         <div class="hrm-ext-tabs">
-          <button class="hrm-ext-tab-btn ${activeTabName === 'table' ? 'active' : ''}" type="button" data-tab="table">Candidates Table (${candsCount})</button>
-          <button class="hrm-ext-tab-btn ${activeTabName === 'spec' ? 'active' : ''}" type="button" data-tab="spec">Job Request Details</button>
+          <button class="hrm-ext-tab-btn ${activeTabName === 'candidates' ? 'active' : ''}" type="button" data-tab="candidates">Candidates Table (${candsCount})</button>
+          <button class="hrm-ext-tab-btn ${activeTabName === 'jobDetails' ? 'active' : ''}" type="button" data-tab="jobDetails">Job Request Details</button>
         </div>
       `;
 
-      if (activeTabName === 'table') {
+      if (activeTabName === 'candidates') {
         const cands = extractedData.candidates || [];
         if (cands.length > 0) {
           let rowsHtml = '';
@@ -375,10 +382,10 @@
 
             rowsHtml += `
               <tr>
-                <td style="font-weight: 600; color: #64748b; width: 36px; text-align: center;">${idx + 1}</td>
+                <td class="hrm-ext-cell-index">${idx + 1}</td>
                 <td class="cand-name-col">
-                  <div style="display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-                    <span style="font-weight: 600;">${escapeHtml(cand.name || 'N/A')}</span>
+                  <div class="hrm-ext-inline-wrap">
+                    <span class="hrm-ext-text-strong">${escapeHtml(cand.name || 'N/A')}</span>
                     ${cvButtonsHtml}
                   </div>
                 </td>
@@ -395,7 +402,7 @@
               <table class="hrm-ext-table">
                 <thead>
                   <tr>
-                    <th style="width: 36px; text-align: center;">#</th>
+                    <th class="hrm-ext-col-index">#</th>
                     <th>Candidate Name</th>
                     <th>Status</th>
                     <th>Code</th>
@@ -408,45 +415,43 @@
             </div>
           `;
         } else {
-          html += `<div style="text-align: center; color: #64748b; padding: 25px;">No candidates attached to this job request yet.</div>`;
+          html += '<div class="hrm-ext-empty-state hrm-ext-empty-state-sm">No candidates attached to this job request yet.</div>';
         }
-      } else if (activeTabName === 'spec') {
+      } else if (activeTabName === 'jobDetails') {
         const req = extractedData.jobRequest || {};
         html += `
-          <div style="display: flex; flex-direction: column; gap: 10px; background: #ffffff; padding: 14px; border: 1px solid #e2e8f0; border-radius: 8px;">
+          <div class="hrm-ext-card hrm-ext-stack-md">
             <div class="hrm-ext-field">
-              <div class="hrm-ext-field-label">Request Summary</div>
-              <div class="hrm-ext-field-value" style="white-space: pre-line;">${escapeHtml(req.request || 'N/A')}</div>
+              <div class="hrm-ext-title">Request Summary</div>
+              <div class="hrm-ext-preline">${escapeHtml(req.request || 'N/A')}</div>
             </div>
             ${req.jobDescription ? `
             <div class="hrm-ext-field">
-              <div class="hrm-ext-field-label">Job Description</div>
-              <div class="hrm-ext-field-value" style="max-height: 280px; overflow-y: auto; border: 1px solid #f1f5f9; padding: 8px; border-radius: 4px;">${req.jobDescription}</div>
+              <div class="hrm-ext-title">Job Description</div>
+              <div class="hrm-ext-preline">${req.jobDescription}</div>
             </div>` : ''}
           </div>
         `;
-      } else if (activeTabName === 'json') {
-        html += `<div class="hrm-ext-json-box">${escapeHtml(JSON.stringify(extractedData, null, 2))}</div>`;
       }
     } else if (isFetching) {
       html += `
-        <div style="text-align: center; color: #f59e0b; padding: 30px 10px;">
-          <div style="font-weight: 600; margin-bottom: 6px;">Fetching Job Request & Candidates...</div>
-          <div style="font-size: 11px; color: #64748b;">Querying HRM APIs concurrently</div>
+        <div class="hrm-ext-empty-state hrm-ext-empty-state-lg hrm-ext-state-loading">
+          <div><strong>Fetching Job Request & Candidates...</strong></div>
+          <div class="hrm-ext-help-text">Querying HRM APIs concurrently</div>
         </div>
       `;
     } else if (currentJobRequestId) {
       html += `
-        <div style="text-align: center; color: #64748b; padding: 30px 10px;">
+        <div class="hrm-ext-empty-state hrm-ext-empty-state-lg">
           <div>Job Request #${currentJobRequestId} detected.</div>
-          <div style="font-size: 12px; margin-top: 6px;">Click <strong>Resync</strong> in the header to extract data.</div>
+          <div class="hrm-ext-count-label hrm-ext-mt-6">Click <strong>Resync</strong> in the header to extract data.</div>
         </div>
       `;
     } else {
       html += `
-        <div style="text-align: center; color: #64748b; padding: 30px 10px;">
+        <div class="hrm-ext-empty-state hrm-ext-empty-state-lg">
           Navigate to a Job Request candidate page:
-          <div style="margin-top: 6px; font-family: monospace; font-size: 11px; color: #2563eb;">/recruitment/job-requests/candidate/&lt;jobRequestsId&gt;</div>
+          <div class="hrm-ext-code-hint">/recruitment/job-requests/candidate/&lt;jobRequestsId&gt;</div>
         </div>
       `;
     }
@@ -460,45 +465,45 @@
       // Selected Job Matching Candidates Table view
       let rowsHtml = '';
       if (isLoadingJobCandidates) {
-        rowsHtml = `<tr><td colspan="5" style="text-align: center; padding: 25px; color: #f59e0b;">Loading matching candidates from backend...</td></tr>`;
+        rowsHtml = '<tr><td colspan="5" class="hrm-ext-cell-message hrm-ext-state-loading">Loading matching candidates from backend...</td></tr>';
       } else if (selectedJobCandidates.length === 0) {
-        rowsHtml = `<tr><td colspan="5" style="text-align: center; padding: 25px; color: #64748b;">No candidates matched with this job yet.</td></tr>`;
+        rowsHtml = '<tr><td colspan="5" class="hrm-ext-cell-message">No candidates matched with this job yet.</td></tr>';
       } else {
         selectedJobCandidates.forEach((c, idx) => {
           rowsHtml += `
             <tr>
-              <td style="width: 36px; text-align: center; font-weight: 600; color: #64748b;">${idx + 1}</td>
+              <td class="hrm-ext-cell-index">${idx + 1}</td>
               <td>
-                <div style="display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-                  <span style="font-weight: 600; color: #1e293b;">${escapeHtml(c.name || 'Unknown')}</span>
+                <div class="hrm-ext-inline-wrap">
+                  <span class="hrm-ext-title-strong">${escapeHtml(c.name || 'Unknown')}</span>
                   ${renderCvActionLinks(c.cv_urls)}
                 </div>
-                <div style="font-size: 11px; color: #64748b; margin-top: 2px;">${escapeHtml(c.code || '')} • ${escapeHtml(c.position || '')} • ${escapeHtml(c.location || '')}</div>
+                <div class="hrm-ext-meta-line">${escapeHtml(c.code || '')} • ${escapeHtml(c.position || '')} • ${escapeHtml(c.location || '')}</div>
               </td>
               <td>${renderStatusBadge(c.status)}</td>
-              <td style="font-size: 12px; color: #334155; max-width: 260px;">${escapeHtml(c.matched_experience || 'Experience aligns with job.')}</td>
-              <td style="width: 110px;">${renderMatchPercent(c.matching_percentage)}</td>
+              <td class="hrm-ext-body-note hrm-ext-note-clamp">${escapeHtml(c.matched_experience || 'Experience aligns with job.')}</td>
+              <td class="hrm-ext-col-match">${renderMatchPercent(c.matching_percentage)}</td>
             </tr>
           `;
         });
       }
 
       return `
-        <div style="display: flex; flex-direction: column; gap: 10px;">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="hrm-ext-stack-md">
+          <div class="hrm-ext-row-between">
             <button class="hrm-ext-sm-btn" id="hrm-ext-back-jobs-btn" type="button">‹ Back to Jobs List</button>
-            <span style="font-size: 12px; color: #64748b;">${selectedJobCandidates.length} Matched Candidate(s)</span>
+            <span class="hrm-ext-count-label">${selectedJobCandidates.length} Matched Candidate(s)</span>
           </div>
-          <div style="background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0;">
-            <div style="font-size: 11px; font-weight: 600; color: #64748b;">JOB MATCHING DETAILS</div>
-            <div style="font-size: 14px; font-weight: 700; color: #1e293b; margin-top: 2px;">${escapeHtml(selectedJob.title || 'Job Request')}</div>
-            <div style="font-size: 12px; color: #475569; margin-top: 4px;">${escapeHtml(selectedJob.request || '')}</div>
+          <div class="hrm-ext-panel-soft">
+            <div class="hrm-ext-section-label">JOB MATCHING DETAILS</div>
+            <div class="hrm-ext-title-lg hrm-ext-mt-2">${escapeHtml(selectedJob.title || 'Job Request')}</div>
+            <div class="hrm-ext-subtext">${escapeHtml(selectedJob.request || '')}</div>
           </div>
           <div class="hrm-ext-table-container">
             <table class="hrm-ext-table">
               <thead>
                 <tr>
-                  <th style="width: 36px; text-align: center;">#</th>
+                  <th class="hrm-ext-col-index">#</th>
                   <th>Candidate Name</th>
                   <th>Status</th>
                   <th>Matched Experience</th>
@@ -514,8 +519,8 @@
 
     // Semantic Search Bar for Jobs
     const searchBarHtml = `
-      <div class="hrm-ext-search-bar" style="margin-bottom: 8px;">
-        <input type="text" id="hrm-ext-job-search-input" class="hrm-ext-input" style="flex: 1; min-width: 0;" placeholder="Semantic search jobs (e.g. C++ embedded, Python tester)..." value="${escapeHtml(jobSearchQuery)}" />
+      <div class="hrm-ext-search-bar hrm-ext-mb-8">
+        <input type="text" id="hrm-ext-job-search-input" class="hrm-ext-input hrm-ext-input-grow" placeholder="Semantic search jobs (e.g. C++ embedded, Python tester)..." value="${escapeHtml(jobSearchQuery)}" />
         <button type="button" id="hrm-ext-job-search-btn" class="hrm-ext-btn-primary">Search</button>
         ${jobSearchQuery ? `<button type="button" id="hrm-ext-job-search-clear-btn" class="hrm-ext-sm-btn">Clear</button>` : ''}
         <button type="button" id="hrm-ext-refresh-jobs-btn" class="hrm-ext-sm-btn">Refresh Jobs</button>
@@ -525,31 +530,31 @@
     // List of All Jobs
     let jobsListHtml = '';
     if (isLoadingJobs) {
-      jobsListHtml = `<div style="text-align: center; color: #f59e0b; padding: 30px;">Loading jobs from backend...</div>`;
+      jobsListHtml = '<div class="hrm-ext-empty-state hrm-ext-empty-state-lg hrm-ext-state-loading">Loading jobs from backend...</div>';
     } else if (backendJobs.length === 0) {
       jobsListHtml = `
-        <div style="text-align: center; color: #64748b; padding: 30px;">
-          ${jobSearchQuery ? `<div>No jobs match "${escapeHtml(jobSearchQuery)}".</div>` : `<div>No jobs found in backend database yet.</div><div style="font-size: 11px; margin-top: 6px;">Navigate to HRM Job Request pages to auto-ingest jobs.</div>`}
+        <div class="hrm-ext-empty-state hrm-ext-empty-state-lg hrm-ext-empty-state-padded">
+          ${jobSearchQuery ? `<div>No jobs match "${escapeHtml(jobSearchQuery)}".</div>` : `<div>No jobs found in backend database yet.</div><div class="hrm-ext-help-text">Navigate to HRM Job Request pages to auto-ingest jobs.</div>`}
         </div>
       `;
     } else {
       let rows = '';
       backendJobs.forEach((j, idx) => {
         const relevanceBadge = j.query_relevance !== undefined
-          ? `<span class="hrm-ext-badge status-purple" style="margin-left: 6px;">${j.query_relevance}% match</span>`
+          ? `<span class="hrm-ext-badge status-purple hrm-ext-badge-spaced">${j.query_relevance}% match</span>`
           : '';
 
         rows += `
           <tr>
-            <td style="width: 36px; text-align: center; font-weight: 600; color: #64748b;">${idx + 1}</td>
+            <td class="hrm-ext-cell-index">${idx + 1}</td>
             <td>
-              <div style="display: flex; align-items: center;">
-                <span style="font-weight: 600; color: #1e293b;">${escapeHtml(j.title || 'Untitled')}</span>
+              <div class="hrm-ext-row-start">
+                <span class="hrm-ext-title-strong">${escapeHtml(j.title || 'Untitled')}</span>
                 ${relevanceBadge}
               </div>
-              <div style="font-size: 11px; color: #64748b; margin-top: 2px;">${escapeHtml(j.code || '')} • ${escapeHtml(j.request ? j.request.substring(0, 70) + '...' : '')}</div>
+              <div class="hrm-ext-meta-line">${escapeHtml(j.code || '')} • ${escapeHtml(j.request ? j.request.substring(0, 70) + '...' : '')}</div>
             </td>
-            <td style="width: 100px; text-align: center;">
+            <td class="hrm-ext-col-action">
               <button class="hrm-ext-sm-btn select-job-btn" data-job-id="${escapeHtml(j.id)}" type="button">View Matches</button>
             </td>
           </tr>
@@ -561,9 +566,9 @@
           <table class="hrm-ext-table">
             <thead>
               <tr>
-                <th style="width: 36px; text-align: center;">#</th>
+                <th class="hrm-ext-col-index">#</th>
                 <th>Job Title</th>
-                <th style="text-align: center;">Action</th>
+                <th class="hrm-ext-table-head-center">Action</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>
@@ -573,10 +578,8 @@
     }
 
     return `
-      <div style="display: flex; flex-direction: column; gap: 8px;">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <span style="font-weight: 700; color: #1e293b; font-size: 13px;">All Saved Jobs (${backendJobs.length})</span>
-        </div>
+      <div class="hrm-ext-stack-sm">
+        <span class="hrm-ext-title-md">All Saved Jobs (${backendJobs.length})</span>
         ${searchBarHtml}
         ${jobsListHtml}
       </div>
@@ -590,39 +593,39 @@
       // Selected Candidate Matching Jobs Table view
       let rowsHtml = '';
       if (isLoadingCandidateJobs) {
-        rowsHtml = `<tr><td colspan="4" style="text-align: center; padding: 25px; color: #f59e0b;">Loading matching jobs from backend...</td></tr>`;
+        rowsHtml = '<tr><td colspan="4" class="hrm-ext-cell-message hrm-ext-state-loading">Loading matching jobs from backend...</td></tr>';
       } else if (selectedCandidateJobs.length === 0) {
-        rowsHtml = `<tr><td colspan="4" style="text-align: center; padding: 25px; color: #64748b;">No matching jobs found for this candidate.</td></tr>`;
+        rowsHtml = '<tr><td colspan="4" class="hrm-ext-cell-message">No matching jobs found for this candidate.</td></tr>';
       } else {
         selectedCandidateJobs.forEach((j, idx) => {
           rowsHtml += `
             <tr>
-              <td style="width: 36px; text-align: center; font-weight: 600; color: #64748b;">${idx + 1}</td>
+              <td class="hrm-ext-cell-index">${idx + 1}</td>
               <td>
-                <div style="font-weight: 600; color: #1e293b;">${escapeHtml(j.job_title || j.title || 'Untitled Job')}</div>
-                <div style="font-size: 11px; color: #64748b;">${escapeHtml(j.code || '')}</div>
+                <div class="hrm-ext-title-strong">${escapeHtml(j.job_title || j.title || 'Untitled Job')}</div>
+                <div class="hrm-ext-meta-line">${escapeHtml(j.code || '')}</div>
               </td>
-              <td style="font-size: 12px; color: #334155; max-width: 260px;">${escapeHtml(j.matched_requests || 'Fulfills job requirements')}</td>
-              <td style="width: 110px;">${renderMatchPercent(j.matching_percentage)}</td>
+              <td class="hrm-ext-body-note hrm-ext-note-clamp">${escapeHtml(j.matched_requests || 'Fulfills job requirements')}</td>
+              <td class="hrm-ext-col-match">${renderMatchPercent(j.matching_percentage)}</td>
             </tr>
           `;
         });
       }
 
       return `
-        <div style="display: flex; flex-direction: column; gap: 10px;">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="hrm-ext-stack-md">
+          <div class="hrm-ext-row-between">
             <button class="hrm-ext-sm-btn" id="hrm-ext-back-candidates-btn" type="button">‹ Back to Search</button>
-            <span style="font-size: 12px; color: #64748b;">${selectedCandidateJobs.length} Matching Job(s)</span>
+            <span class="hrm-ext-count-label">${selectedCandidateJobs.length} Matching Job(s)</span>
           </div>
-          <div style="background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div class="hrm-ext-panel-soft">
+            <div class="hrm-ext-row-between">
               <div>
-                <div style="display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                  <span style="font-size: 14px; font-weight: 700; color: #1e293b;">${escapeHtml(selectedCandidate.name || 'Candidate')}</span>
+                <div class="hrm-ext-inline-wrap hrm-ext-inline-wrap-md">
+                  <span class="hrm-ext-title-lg">${escapeHtml(selectedCandidate.name || 'Candidate')}</span>
                   ${renderCvActionLinks(selectedCandidate.cv_urls)}
                 </div>
-                <div style="font-size: 12px; color: #475569; margin-top: 2px;">${escapeHtml(selectedCandidate.position || '')} • ${escapeHtml(selectedCandidate.location || '')}</div>
+                <div class="hrm-ext-subtext">${escapeHtml(selectedCandidate.position || '')} • ${escapeHtml(selectedCandidate.location || '')}</div>
               </div>
               <div>${renderStatusBadge(selectedCandidate.status)}</div>
             </div>
@@ -631,7 +634,7 @@
             <table class="hrm-ext-table">
               <thead>
                 <tr>
-                  <th style="width: 36px; text-align: center;">#</th>
+                  <th class="hrm-ext-col-index">#</th>
                   <th>Job Title</th>
                   <th>Matched Requests</th>
                   <th>Matching %</th>
@@ -647,7 +650,7 @@
     // Search input and candidate search results
     let resultsHtml = '';
     if (isSearchingCandidates) {
-      resultsHtml = `<div style="text-align: center; color: #f59e0b; padding: 25px;">Searching candidates in backend...</div>`;
+      resultsHtml = '<div class="hrm-ext-empty-state hrm-ext-empty-state-sm hrm-ext-state-loading">Searching candidates in backend...</div>';
     } else if (candidateSearchResults.length > 0) {
       let rows = '';
       candidateSearchResults.forEach((c, idx) => {
@@ -656,23 +659,23 @@
           : '';
 
         const relevanceBadge = c.query_relevance !== undefined
-          ? `<span class="hrm-ext-badge status-purple" style="margin-left: 6px;">${c.query_relevance}% match</span>`
+          ? `<span class="hrm-ext-badge status-purple hrm-ext-badge-spaced">${c.query_relevance}% match</span>`
           : '';
 
         rows += `
           <tr>
-            <td style="width: 36px; text-align: center; font-weight: 600; color: #64748b;">${idx + 1}</td>
+            <td class="hrm-ext-cell-index">${idx + 1}</td>
             <td>
-              <div style="display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-                <span style="font-weight: 600; color: #1e293b;">${escapeHtml(c.name || 'Candidate')}</span>
+              <div class="hrm-ext-inline-wrap">
+                <span class="hrm-ext-title-strong">${escapeHtml(c.name || 'Candidate')}</span>
                 ${relevanceBadge}
                 ${renderCvActionLinks(c.cv_urls)}
               </div>
-              <div style="font-size: 11px; color: #64748b; margin-top: 2px;">${escapeHtml(c.code || '')} • ${escapeHtml(c.position || '')} • ${escapeHtml(c.location || '')}</div>
-              <div style="margin-top: 4px;">${skillsList}</div>
+              <div class="hrm-ext-meta-line">${escapeHtml(c.code || '')} • ${escapeHtml(c.position || '')} • ${escapeHtml(c.location || '')}</div>
+              <div class="hrm-ext-mt-4">${skillsList}</div>
             </td>
             <td>${renderStatusBadge(c.status)}</td>
-            <td style="width: 120px; text-align: center;">
+            <td class="hrm-ext-col-action">
               <button class="hrm-ext-sm-btn select-cand-btn" data-cand-id="${escapeHtml(c.id)}" type="button">Find Jobs</button>
             </td>
           </tr>
@@ -684,10 +687,10 @@
           <table class="hrm-ext-table">
             <thead>
               <tr>
-                <th style="width: 36px; text-align: center;">#</th>
+                <th class="hrm-ext-col-index">#</th>
                 <th>Candidate Details</th>
                 <th>Status</th>
-                <th style="text-align: center;">Action</th>
+                <th class="hrm-ext-table-head-center">Action</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>
@@ -695,12 +698,12 @@
         </div>
       `;
     } else if (candidateSearchQuery) {
-      resultsHtml = `<div style="text-align: center; color: #64748b; padding: 25px;">No candidates match query "${escapeHtml(candidateSearchQuery)}".</div>`;
+      resultsHtml = `<div class="hrm-ext-empty-state hrm-ext-empty-state-sm">No candidates match query "${escapeHtml(candidateSearchQuery)}".</div>`;
     } else {
       resultsHtml = `
-        <div style="text-align: center; color: #64748b; padding: 30px;">
+        <div class="hrm-ext-empty-state hrm-ext-empty-state-lg hrm-ext-empty-state-padded">
           <div>Search candidates across all saved records.</div>
-          <div style="font-size: 11px; margin-top: 6px;">Try queries like: <code>Python tester</code>, <code>C++ embedded</code>, or <code>PM_ROUND</code>.</div>
+          <div class="hrm-ext-help-text">Try queries like: <code>Python tester</code>, <code>C++ embedded</code>, or <code>PM_ROUND</code>.</div>
         </div>
       `;
     }
@@ -708,14 +711,12 @@
     const candCount = candidateSearchQuery ? candidateSearchResults.length : totalCandidatesCount;
 
     return `
-      <div style="display: flex; flex-direction: column; gap: 8px;">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <span style="font-weight: 700; color: #1e293b; font-size: 13px;">
-            ${candidateSearchQuery ? `Candidate Results (${candCount})` : `All Saved Candidates (${totalCandidatesCount})`}
-          </span>
-        </div>
-        <div class="hrm-ext-search-bar" style="margin-bottom: 8px;">
-          <input type="text" id="hrm-ext-candidate-search-input" class="hrm-ext-input" style="flex: 1; min-width: 0;" placeholder="Search candidate skills, title, status..." value="${escapeHtml(candidateSearchQuery)}" />
+      <div class="hrm-ext-stack-sm">
+        <span class="hrm-ext-title-md">
+          ${candidateSearchQuery ? `Candidate Results (${candCount})` : `All Saved Candidates (${totalCandidatesCount})`}
+        </span>
+        <div class="hrm-ext-search-bar hrm-ext-mb-8">
+          <input type="text" id="hrm-ext-candidate-search-input" class="hrm-ext-input hrm-ext-input-grow" placeholder="Search candidate skills, title, status..." value="${escapeHtml(candidateSearchQuery)}" />
           <button type="button" id="hrm-ext-candidate-search-btn" class="hrm-ext-btn-primary">Search</button>
           ${candidateSearchQuery ? `<button type="button" id="hrm-ext-candidate-search-clear-btn" class="hrm-ext-sm-btn">Clear</button>` : ''}
           <button type="button" id="hrm-ext-refresh-candidates-btn" class="hrm-ext-sm-btn">Refresh Candidates</button>
@@ -741,22 +742,21 @@
     `).join('');
 
     return `
-      <div style="display: flex; flex-direction: column; gap: 14px; width: 100%; box-sizing: border-box;">
+      <div class="hrm-ext-stack-lg hrm-ext-full-width">
         <!-- Backend Connection -->
 
         <div class="hrm-ext-card">
           <div class="hrm-ext-card-title">Backend Connection</div>
           <div class="hrm-ext-field">
-            <div class="hrm-ext-field-label">Backend Service URL</div>
-            <div style="display: flex; gap: 8px; margin-top: 4px;">
-              <input type="text" id="hrm-ext-backend-url-input" class="hrm-ext-input" style="flex: 1;" value="${escapeHtml(getBackendUrl())}" />
+            <div class="hrm-ext-row-input hrm-ext-mt-4">
+              <input type="text" id="hrm-ext-backend-url-input" class="hrm-ext-input hrm-ext-input-grow" value="${escapeHtml(getBackendUrl())}" />
               <button type="button" id="hrm-ext-save-url-btn" class="hrm-ext-sm-btn">Save</button>
             </div>
-            <div style="font-size: 11px; color: #64748b; margin-top: 4px;">Default port: 8765 (http://localhost:8765)</div>
+            <div class="hrm-ext-help-text hrm-ext-mt-4">Default port: 8765 (http://localhost:8765)</div>
           </div>
-          <div style="margin-top: 10px; display: flex; gap: 8px; align-items: center;">
+          <div class="hrm-ext-row-input hrm-ext-mt-10">
             <button type="button" id="hrm-ext-test-health-btn" class="hrm-ext-btn-primary">Test Connection</button>
-            <div id="hrm-ext-health-result" style="font-size: 12px; color: #475569;"></div>
+            <div id="hrm-ext-health-result" class="hrm-ext-body-note"></div>
           </div>
         </div>
 
@@ -765,45 +765,43 @@
           <div class="hrm-ext-card-title">Local AI Semantic Model</div>
 
           <!-- Current Selected Model Display -->
-          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.03em;">CURRENT SELECTED MODEL</span>
-              <span class="hrm-ext-badge ${isModelLoaded ? 'status-green' : 'status-amber'}" style="font-size: 10px;">
+          <div class="hrm-ext-panel-soft">
+            <div class="hrm-ext-row-between">
+              <span class="hrm-ext-section-label hrm-ext-section-label-caps">CURRENT SELECTED MODEL</span>
+              <span class="hrm-ext-badge hrm-ext-badge-xs ${isModelLoaded ? 'status-green' : 'status-amber'}">
                 ${isModelLoaded ? 'Active & Loaded' : 'Fallback Vectorizer'}
               </span>
             </div>
-            <div style="font-size: 14px; font-weight: 700; color: #1e293b; margin-top: 4px;">
+            <div class="hrm-ext-title-md hrm-ext-mt-4">
               ${escapeHtml(currentModelInfo.name || currentModelInfo.id)}
             </div>
-            <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px; font-size: 11px; color: #475569; flex-wrap: wrap;">
+            <div class="hrm-ext-model-meta-row">
               <span class="hrm-ext-badge status-purple">${currentModelInfo.dim} Dimensions</span>
-              <span>Size: <strong>${currentModelInfo.size}</strong></span>
-              <span style="color: #94a3b8;">•</span>
-              <span style="font-family: monospace; color: #64748b;">${escapeHtml(currentModelInfo.id)}</span>
+              <span>Size: <strong>${currentModelInfo.size}</strong> • <span class="hrm-ext-model-id">${escapeHtml(currentModelInfo.id)}</span></span>
             </div>
           </div>
 
-          <div class="hrm-ext-card-desc" style="margin-top: 6px;">
+          <div class="hrm-ext-card-desc hrm-ext-mt-6">
             Choose a local embedding model for semantic candidate-job matching:
           </div>
-          <div style="display: flex; gap: 8px; margin-top: 4px;">
-            <select id="hrm-ext-model-select" class="hrm-ext-select" style="flex: 1;">
+          <div class="hrm-ext-row-input hrm-ext-mt-4">
+            <select id="hrm-ext-model-select" class="hrm-ext-select hrm-ext-input-grow">
               ${modelOptionsHtml || `<option value="${escapeHtml(activeModel)}">${escapeHtml(activeModel || 'Loading models...')}</option>`}
             </select>
             <button type="button" id="hrm-ext-apply-model-btn" class="hrm-ext-btn-primary" ${isSwitchingModel ? 'disabled' : ''}>${isSwitchingModel ? 'Applying...' : 'Apply Model'}</button>
           </div>
-          <div id="hrm-ext-model-feedback" style="font-size: 11px; color: #64748b; margin-top: 6px;">
+          <div id="hrm-ext-model-feedback" class="hrm-ext-help-text">
             Note: Changing models requires clearing the database first to prevent vector dimension mismatches.
           </div>
         </div>
 
         <!-- Database Management -->
         <div class="hrm-ext-card hrm-ext-danger-card">
-          <div class="hrm-ext-card-title" style="color: #b91c1c;">Database Management</div>
+          <div class="hrm-ext-card-title hrm-ext-text-danger">Database Management</div>
           <div class="hrm-ext-card-desc">Clear all stored jobs, candidates, and pre-calculated matches from SQLite:</div>
-          <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">
+          <div class="hrm-ext-row-input hrm-ext-mt-8">
             <button type="button" id="hrm-ext-clear-db-btn" class="hrm-ext-btn-danger" ${isClearingDb ? 'disabled' : ''}>${isClearingDb ? 'Clearing...' : 'Clear All Database'}</button>
-            <div id="hrm-ext-clear-db-feedback" style="font-size: 12px; color: #64748b;"></div>
+            <div id="hrm-ext-clear-db-feedback" class="hrm-ext-body-note"></div>
           </div>
         </div>
       </div>
@@ -840,6 +838,7 @@
         <div class="hrm-ext-page-container">${pageContent}</div>
       `;
 
+      applyMatchProgressWidths(bodyEl);
       bindDrawerEvents(bodyEl);
     }
     updateHeaderSyncStatus();
@@ -873,7 +872,7 @@
     tabBtns.forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        activeTabName = btn.dataset.tab;
+        activeTabName = btn.dataset.tab || activeTabName;
         updateDrawerContent();
       });
     });
@@ -1003,20 +1002,20 @@
     if (testHealthBtn && healthResultEl) {
       testHealthBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        healthResultEl.innerHTML = '<span style="color: #f59e0b;">Checking backend...</span>';
+        healthResultEl.innerHTML = '<span class="hrm-ext-health-checking">Checking backend...</span>';
         try {
           const res = await fetch(`${getBackendUrl()}/api/health`);
           if (res.ok) {
             const data = await res.json();
             healthResultEl.innerHTML = `
-              <span style="color: #10b981; font-weight: 600;">Connected</span>
-              <div style="font-size: 11px; color: #64748b;">Jobs: ${data.stats?.jobs_count || 0} | Candidates: ${data.stats?.candidates_count || 0} | Matches: ${data.stats?.matches_count || 0}</div>
+              <span class="hrm-ext-health-success">Connected</span>
+              <div class="hrm-ext-health-meta">Jobs: ${data.stats?.jobs_count || 0} | Candidates: ${data.stats?.candidates_count || 0} | Matches: ${data.stats?.matches_count || 0}</div>
             `;
           } else {
-            healthResultEl.innerHTML = `<span style="color: #ef4444;">HTTP ${res.status} error</span>`;
+            healthResultEl.innerHTML = `<span class="hrm-ext-health-error">HTTP ${res.status} error</span>`;
           }
         } catch (err) {
-          healthResultEl.innerHTML = `<span style="color: #ef4444;">Error: ${escapeHtml(err.message)}</span>`;
+          healthResultEl.innerHTML = `<span class="hrm-ext-health-error">Error: ${escapeHtml(err.message)}</span>`;
         }
       });
     }
@@ -1033,9 +1032,9 @@
           const dimDiff = currentInfo && chosenInfo && currentInfo.dim !== chosenInfo.dim
             ? ` (${currentInfo.dim}d → ${chosenInfo.dim}d)`
             : '';
-          modelFeedbackEl.innerHTML = `<span style="color: #b45309; font-weight: 600;">Selected: ${escapeHtml(chosenInfo?.name || chosen)}${dimDiff}. Note: Changing models requires clearing the database first.</span>`;
+          modelFeedbackEl.innerHTML = `<span class="hrm-ext-feedback-warning">Selected: ${escapeHtml(chosenInfo?.name || chosen)}${dimDiff}. Note: Changing models requires clearing the database first.</span>`;
         } else {
-          modelFeedbackEl.innerHTML = `<span style="color: #64748b;">Note: Changing models requires clearing the database first to prevent vector dimension mismatches.</span>`;
+          modelFeedbackEl.innerHTML = '<span class="hrm-ext-feedback-default">Note: Changing models requires clearing the database first to prevent vector dimension mismatches.</span>';
         }
       });
     }
@@ -1049,7 +1048,7 @@
 
         if (chosenModel === activeModel) {
           if (modelFeedbackEl) {
-            modelFeedbackEl.innerHTML = `<span style="color: #10b981; font-weight: 600;">Model '${escapeHtml(currentModelObj.name)}' is already currently selected.</span>`;
+            modelFeedbackEl.innerHTML = `<span class="hrm-ext-feedback-success">Model '${escapeHtml(currentModelObj.name)}' is already currently selected.</span>`;
           }
           return;
         }
@@ -1073,7 +1072,7 @@
         const executeSwitch = async (clearDb) => {
           isSwitchingModel = true;
           if (modelFeedbackEl) {
-            modelFeedbackEl.innerHTML = '<span style="color: #f59e0b;">Switching model in memory...</span>';
+            modelFeedbackEl.innerHTML = '<span class="hrm-ext-feedback-loading">Switching model in memory...</span>';
           }
           updateDrawerContent();
 
@@ -1119,13 +1118,13 @@
           showModal({
             title: 'Dimension Mismatch: Clear Database Required',
             bodyHtml: `
-              <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; padding: 10px 12px; color: #991b1b;">
+              <div class="hrm-ext-modal-warning-box">
                 <strong>Warning:</strong> The database currently contains <strong>${jobsCount} job(s)</strong> and <strong>${candsCount} candidate(s)</strong> embedded with the previous model.
               </div>
-              <div style="color: #334155; font-size: 12px; line-height: 1.5;">
+              <div class="hrm-ext-modal-warning-copy">
                 Switching from <strong>${escapeHtml(currentModelObj.name)}</strong> (${currentModelObj.dim}d) to <strong>${escapeHtml(newModelObj.name)}</strong> (${newModelObj.dim}d) causes vector dimension and latent space mismatches with existing data. ${dimensionNote}
               </div>
-              <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 8px 12px; font-size: 11px; color: #b45309;">
+              <div class="hrm-ext-modal-warning-note hrm-ext-modal-warning-note-box">
                 <strong>Please clear the database first</strong> before changing the model so all jobs and candidates are re-embedded consistently.
               </div>
             `,
@@ -1138,7 +1137,7 @@
             onCancel: () => {
               if (modelSelect) modelSelect.value = activeModel;
               if (modelFeedbackEl) {
-                modelFeedbackEl.innerHTML = `<span style="color: #64748b;">Model switch cancelled. Cleared database required first.</span>`;
+                modelFeedbackEl.innerHTML = '<span class="hrm-ext-feedback-default">Model switch cancelled. Cleared database required first.</span>';
               }
             }
           });
@@ -1318,7 +1317,7 @@
         <div class="hrm-ext-modal-card">
           <div class="hrm-ext-modal-header">
             <div class="hrm-ext-modal-title">${escapeHtml(title)}</div>
-            <button type="button" class="hrm-ext-header-btn modal-close-btn" style="font-size: 16px; padding: 2px 6px;">&times;</button>
+            <button type="button" class="hrm-ext-header-btn hrm-ext-modal-close-btn modal-close-btn">&times;</button>
           </div>
           <div class="hrm-ext-modal-body">${bodyHtml}</div>
           <div class="hrm-ext-modal-actions">
@@ -1404,7 +1403,7 @@
       <div id="hrm-ext-drawer">
         <div class="hrm-ext-header">
           <div class="hrm-ext-title">
-            <span>⚡ HRM Assistant</span>
+            <span>HRM Assistant</span>
           </div>
           <div class="hrm-ext-header-actions">
             <div id="hrm-ext-header-sync-status"></div>

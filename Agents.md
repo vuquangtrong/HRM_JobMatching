@@ -7,5 +7,6 @@
 
 ## Rules
 
-- Do not generate icons in code
 - Can use colors to indicate status
+- Do not generate icons in code
+- Do not use inline styles, make css class and use it. try to keep minimal number of classes, based on less styles and elements to make minial UI layout.

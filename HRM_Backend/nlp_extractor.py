@@ -148,49 +148,49 @@ LEVEL_PATTERNS = {
 AVAILABLE_MODELS = [
     {
         "id": "BAAI/bge-large-en-v1.5",
-        "name": "BGE Large EN v1.5 (Recommended for Maximum Accuracy)",
+        "name": "BGE Large EN v1.5",
         "dim": 1024,
         "size": "~1.20 GB"
     },
     {
         "id": "BAAI/bge-base-en-v1.5",
-        "name": "BGE Base EN v1.5 (High Accuracy Base)",
+        "name": "BGE Base EN v1.5",
         "dim": 768,
         "size": "~210 MB"
     },
     {
         "id": "thenlper/gte-large",
-        "name": "GTE Large (General Text Embeddings Large)",
+        "name": "GTE Large",
         "dim": 1024,
         "size": "~1.20 GB"
     },
     {
         "id": "thenlper/gte-base",
-        "name": "GTE Base (General Text Embeddings Base)",
+        "name": "GTE Base",
         "dim": 768,
         "size": "~440 MB"
     },
     {
         "id": "snowflake/snowflake-arctic-embed-l",
-        "name": "Snowflake Arctic Embed L (Large)",
+        "name": "Snowflake Arctic Embed L",
         "dim": 1024,
         "size": "~1.02 GB"
     },
     {
         "id": "snowflake/snowflake-arctic-embed-m",
-        "name": "Snowflake Arctic Embed M (Base)",
+        "name": "Snowflake Arctic Embed M",
         "dim": 768,
         "size": "~430 MB"
     },
     {
         "id": "mixedbread-ai/mxbai-embed-large-v1",
-        "name": "MixedBread mxbai Large v1 (SOTA English Large)",
+        "name": "MixedBread mxbai Large v1",
         "dim": 1024,
         "size": "~640 MB"
     },
     {
         "id": "jinaai/jina-embeddings-v2-base-en",
-        "name": "Jina Embeddings v2 Base EN (8K Context)",
+        "name": "Jina Embeddings v2 Base EN",
         "dim": 768,
         "size": "~520 MB"
     }
