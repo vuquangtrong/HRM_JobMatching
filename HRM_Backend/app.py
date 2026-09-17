@@ -4,7 +4,9 @@ FastAPI service running on custom port 8765.
 """
 
 import os
+import re
 import logging
+import concurrent.futures
 from typing import List, Dict, Any, Optional, Tuple
 from contextlib import asynccontextmanager
 
@@ -17,9 +19,11 @@ from database import (
     save_or_update_job,
     get_job_by_id,
     get_all_jobs,
+    get_all_jobs_with_embeddings,
     save_or_update_candidate,
     get_candidate_by_id,
     get_all_candidates,
+    get_all_candidates_with_embeddings,
     get_matching_candidates_for_job,
     get_matching_jobs_for_candidate,
     get_db_stats,
@@ -28,6 +32,7 @@ from database import (
 from nlp_extractor import (
     extract_job_keywords,
     extract_candidate_keywords,
+    extract_skills,
     download_and_extract_cv,
     get_semantic_model,
     LocalSemanticModel,
@@ -71,7 +76,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -85,6 +90,8 @@ class JobPayload(BaseModel):
     id: str = Field(..., description="Job Request unique ID")
     title: Optional[str] = Field(None, description="Job title")
     code: Optional[str] = Field(None, description="Job code")
+    level: Optional[str] = Field(None, description="Seniority level")
+    levelCandidate: Optional[Any] = Field(None, description="HRM level candidate spec")
     request: Optional[str] = Field(None, description="Summary of requirements")
     jobDescription: Optional[str] = Field(None, description="Full job description HTML")
     raw_data: Optional[Dict[str, Any]] = None
@@ -98,6 +105,7 @@ class CandidatePayload(BaseModel):
     position: Optional[str] = None
     location: Optional[str] = None
     status: Optional[str] = "OPEN"
+    level: Optional[str] = None
     cvs: Optional[List[str]] = Field(default_factory=list)
     cvInformation: Optional[str] = None
     experience: Optional[str] = None
@@ -154,7 +162,7 @@ def ingest_job(payload: JobPayload, force_recalculate: bool = False):
 
     if is_new:
         # Brand new job: extract keywords and semantic embedding
-        extracted = extract_job_keywords(title, req, desc)
+        extracted = extract_job_keywords(title, req, desc, raw_level=payload.level or payload.levelCandidate)
         job_data = {
             "id": payload.id,
             "title": title,
@@ -178,7 +186,7 @@ def ingest_job(payload: JobPayload, force_recalculate: bool = False):
             "request": req or existing_job.get("request", ""),
             "job_description": desc or existing_job.get("job_description", ""),
             "extracted_keywords": existing_job.get("extracted_keywords", []),
-            "extracted_level": existing_job.get("extracted_level", ""),
+            "extracted_level": payload.level or existing_job.get("extracted_level", ""),
             "embedding": existing_job.get("embedding"),
             "raw_data": payload.raw_data or payload.model_dump()
         }
@@ -199,42 +207,127 @@ def ingest_job(payload: JobPayload, force_recalculate: bool = False):
     }
 
 
+# Search Query Stop Words
+SEARCH_STOP_WORDS = {
+    "and", "or", "in", "with", "for", "the", "a", "an", "to", "of", "on", "at", "by", "from", "is", "are"
+}
+
+
+def compute_search_relevance(
+    query_text: str,
+    text_fields: List[str],
+    extracted_keywords: List[str],
+    doc_embedding: Optional[List[float]],
+    q_vec: List[float],
+    query_skills: List[str],
+    is_dense: Optional[bool] = None
+) -> float:
+    """
+    Computes search relevance score [0.0, 100.0] combining:
+    1. Exact query match in text fields
+    2. Token-level overlap on non-stop words
+    3. AI skill concept overlap between query and document
+    4. Bipolar semantic embedding cosine similarity (baseline-corrected for dense transformers)
+    Returns 0.0 if there is neither keyword/concept match nor meaningful semantic similarity.
+    """
+    q_lower = query_text.strip().lower()
+    q_tokens = [w for w in re.findall(r"[a-zA-Z0-9\+#]+", q_lower) if len(w) > 1 or w in ("c", "r")]
+    content_tokens = [t for t in q_tokens if t not in SEARCH_STOP_WORDS] or q_tokens
+
+    kw_score = 0.0
+    combined_text = " ".join(f for f in text_fields if f).lower()
+
+    # 1. Exact full query match
+    if q_lower and q_lower in combined_text:
+        kw_score += 0.55
+
+    # 2. Token overlap on non-stop words
+    all_words = set(re.findall(r"[a-zA-Z0-9\+#]+", combined_text))
+    matched_tokens = sum(1 for t in content_tokens if t in all_words)
+    if content_tokens:
+        kw_score += 0.35 * (matched_tokens / len(content_tokens))
+
+    # 3. AI Skill Concept overlap
+    doc_skills_lower = [s.lower() for s in (extracted_keywords or [])]
+    skill_hits = sum(1 for t in content_tokens if any(t == s or t in s.split() for s in doc_skills_lower))
+    if content_tokens and skill_hits:
+        kw_score += 0.40 * (skill_hits / len(content_tokens))
+
+    # Concept-to-concept overlap
+    if query_skills:
+        concept_matches = sum(1 for qs in query_skills if qs.lower() in doc_skills_lower)
+        if concept_matches:
+            kw_score += 0.40 * (concept_matches / len(query_skills))
+
+    kw_score = min(1.0, kw_score)
+
+    # 4. Dense / Bipolar semantic similarity
+    if is_dense is None:
+        model = get_semantic_model()
+        is_dense = model.fastembed_model is not None
+
+    raw_sem = LocalSemanticModel.cosine_similarity(q_vec, doc_embedding)
+    if is_dense:
+        # Dense transformer models (BGE / MiniLM) exhibit cosine anisotropy baseline around ~0.45-0.52
+        baseline = 0.54
+        norm_sem = max(0.0, (raw_sem - baseline) / (1.0 - baseline)) if raw_sem > baseline else 0.0
+    else:
+        # Bipolar signed hash vectorizer is zero-mean orthogonal centered at 0.0
+        norm_sem = max(0.0, raw_sem)
+
+    # 5. Combined relevance calculation
+    if kw_score > 0 and norm_sem > 0:
+        relevance = round(min(100.0, (kw_score * 60.0) + (norm_sem * 40.0)), 1)
+    elif kw_score > 0:
+        relevance = round(min(100.0, kw_score * 70.0), 1)
+    elif norm_sem >= 0.15:
+        relevance = round(min(100.0, norm_sem * 80.0), 1)
+    else:
+        # Zero keyword match AND semantic similarity below threshold -> completely unrelated / dump word
+        relevance = 0.0
+
+    return relevance
+
+
 @app.get("/api/jobs")
-def list_jobs(q: Optional[str] = Query(None, description="Semantic search query to filter jobs")):
-    """Lists all saved jobs. If 'q' is provided, ranks jobs semantically and by keyword matching."""
+def list_jobs(
+    q: Optional[str] = Query(None, description="Semantic search query to filter jobs"),
+    min_score: float = Query(20.0, description="Minimum relevance threshold to filter out unrelated results")
+):
+    """Lists saved jobs. If 'q' is provided, filters and ranks jobs semantically and by keyword matching."""
     all_jobs = get_all_jobs()
     if not q or not q.strip():
         return all_jobs
 
     query_text = q.strip().lower()
     model = get_semantic_model()
+    is_dense = model.fastembed_model is not None
     q_vec = model.get_embedding(query_text)
+    query_skills = extract_skills(query_text)
+
+    # Fetch jobs with embeddings in a single query to eliminate N+1 overhead
+    jobs_with_emb = get_all_jobs_with_embeddings()
+    emb_map = {j["id"]: j for j in jobs_with_emb}
 
     scored_jobs = []
     for j in all_jobs:
-        full_job = get_job_by_id(j["id"])
+        full_job = emb_map.get(j["id"])
         if not full_job:
             continue
 
-        # Semantic cosine similarity
-        j_vec = full_job.get("embedding")
-        sem_score = LocalSemanticModel.cosine_similarity(q_vec, j_vec)
+        relevance = compute_search_relevance(
+            query_text=query_text,
+            text_fields=[full_job.get("title", ""), full_job.get("code", ""), full_job.get("request", "")],
+            extracted_keywords=full_job.get("extracted_keywords", []),
+            doc_embedding=full_job.get("embedding"),
+            q_vec=q_vec,
+            query_skills=query_skills,
+            is_dense=is_dense
+        )
 
-        # Keyword matching
-        title = (full_job.get("title") or "").lower()
-        req = (full_job.get("request") or "").lower()
-        skills = [s.lower() for s in full_job.get("extracted_keywords") or []]
-
-        kw_match = 0.0
-        if query_text in title or query_text in req:
-            kw_match += 0.5
-        for s in skills:
-            if s in query_text or query_text in s:
-                kw_match += 0.3
-
-        relevance = round(min(100.0, (sem_score * 50.0) + (kw_match * 50.0)), 1)
-        j["query_relevance"] = relevance
-        scored_jobs.append(j)
+        if relevance >= min_score:
+            j["query_relevance"] = relevance
+            scored_jobs.append(j)
 
     scored_jobs.sort(key=lambda x: x.get("query_relevance", 0.0), reverse=True)
     return scored_jobs
@@ -267,7 +360,11 @@ def get_job_candidates(job_id: str, limit: int = Query(100, ge=1, le=200)):
 # Candidates APIs
 # ------------------------------------------
 
-def process_single_candidate(cand_payload: CandidatePayload, token: Optional[str] = None) -> Tuple[Dict[str, Any], bool]:
+def process_single_candidate(
+    cand_payload: CandidatePayload,
+    token: Optional[str] = None,
+    prefetched_cv_text: Optional[str] = None
+) -> Tuple[Dict[str, Any], bool]:
     """
     Helper to save candidate.
     Only extracts embeddings, downloads CV, and recalculates matches IF the candidate is NEW.
@@ -291,7 +388,7 @@ def process_single_candidate(cand_payload: CandidatePayload, token: Optional[str
             "cv_text": existing_cand.get("cv_text", ""),
             "extracted_keywords": existing_cand.get("extracted_keywords", []),
             "extracted_experiences": existing_cand.get("extracted_experiences", {}),
-            "extracted_level": existing_cand.get("extracted_level", ""),
+            "extracted_level": cand_payload.level or existing_cand.get("extracted_level", ""),
             "embedding": existing_cand.get("embedding"),
             "raw_data": cand_payload.raw_data or cand_payload.model_dump()
         }
@@ -301,10 +398,10 @@ def process_single_candidate(cand_payload: CandidatePayload, token: Optional[str
     else:
         # Brand new candidate: extract keywords, embeddings, save to DB, and recalculate
         cv_urls = cand_payload.cvs or []
-        cv_text = ""
+        cv_text = prefetched_cv_text or ""
 
-        # Try downloading first CV PDF if token provided
-        if cv_urls and token:
+        # Try downloading first CV PDF if token provided and not prefetched
+        if not cv_text and cv_urls and token:
             first_url = cv_urls[0]
             try:
                 cv_text = download_and_extract_cv(first_url, token)
@@ -312,13 +409,21 @@ def process_single_candidate(cand_payload: CandidatePayload, token: Optional[str
             except Exception as e:
                 logger.warning(f"Could not download CV from {first_url}: {e}")
 
+        raw_langs = None
+        if cand_payload.raw_data and isinstance(cand_payload.raw_data, dict):
+            raw_langs = cand_payload.raw_data.get("languages") or (cand_payload.raw_data.get("cv", {}) or {}).get("languages")
+
         extracted = extract_candidate_keywords(
             name=cand_payload.name or "",
             position=cand_payload.position or "",
             location=cand_payload.location or "",
             cv_information=cand_payload.cvInformation,
             cv_text=cv_text,
-            raw_status=cand_payload.status
+            raw_status=cand_payload.status,
+            raw_level=cand_payload.level,
+            raw_experience=cand_payload.experience,
+            cv_urls=cv_urls,
+            raw_languages=raw_langs
         )
 
         cand_data = {
@@ -363,14 +468,42 @@ def batch_ingest_candidates(payload: BatchCandidatePayload):
     """
     Batch ingests candidates extracted by HRM_Ext.
     Extracts status (e.g. PM_ROUND), position, keywords, and pre-calculates matches ONLY for new candidates.
+    Downloads CVs in parallel using ThreadPoolExecutor for new candidates.
     """
     token = payload.token
+    candidates = payload.candidates
+    cv_texts_map = {}
+
+    # Identify brand new candidates requiring CV download
+    if token and candidates:
+        to_download = []
+        for cand in candidates:
+            if not get_candidate_by_id(cand.id) and cand.cvs:
+                to_download.append((cand.id, cand.cvs[0], cand.name or "Unknown Candidate"))
+
+        if to_download:
+            def _download_task(item):
+                cid, url, name = item
+                try:
+                    text = download_and_extract_cv(url, token)
+                    logger.info(f"Downloaded CV for '{name}' in thread pool ({len(text)} chars)")
+                    return cid, text
+                except Exception as e:
+                    logger.warning(f"Could not download CV for '{name}' from {url}: {e}")
+                    return cid, ""
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                for cid, text in executor.map(_download_task, to_download):
+                    if text:
+                        cv_texts_map[cid] = text
+
     processed = []
     new_count = 0
     updated_count = 0
-    for cand in payload.candidates:
+    for cand in candidates:
         try:
-            saved, is_new = process_single_candidate(cand, token)
+            prefetched = cv_texts_map.get(cand.id)
+            saved, is_new = process_single_candidate(cand, token, prefetched_cv_text=prefetched)
             processed.append(saved["id"])
             if is_new:
                 new_count += 1
@@ -389,10 +522,13 @@ def batch_ingest_candidates(payload: BatchCandidatePayload):
 
 
 @app.get("/api/candidates")
-def search_candidates(q: Optional[str] = Query(None, description="Free-text search query or skill")):
+def search_candidates(
+    q: Optional[str] = Query(None, description="Free-text search query or skill"),
+    min_score: float = Query(20.0, description="Minimum relevance threshold to filter out unrelated results")
+):
     """
     Searches or lists candidates.
-    If query `q` is provided, computes similarity with candidate profiles/skills.
+    If query `q` is provided, filters and ranks candidates semantically and by keyword matching.
     """
     all_cands = get_all_candidates()
     if not q or not q.strip():
@@ -401,34 +537,39 @@ def search_candidates(q: Optional[str] = Query(None, description="Free-text sear
     # Rank candidates against search prompt
     query_text = q.strip().lower()
     model = get_semantic_model()
+    is_dense = model.fastembed_model is not None
     q_vec = model.get_embedding(query_text)
+    query_skills = extract_skills(query_text)
+
+    # Fetch candidates with embeddings in a single query to eliminate N+1 overhead
+    cands_with_emb = get_all_candidates_with_embeddings()
+    emb_map = {c["id"]: c for c in cands_with_emb}
 
     scored_cands = []
     for c in all_cands:
-        cand_full = get_candidate_by_id(c["id"])
+        cand_full = emb_map.get(c["id"])
         if not cand_full:
             continue
 
-        # Semantic score
-        c_vec = cand_full.get("embedding")
-        sem_score = LocalSemanticModel.cosine_similarity(q_vec, c_vec)
+        relevance = compute_search_relevance(
+            query_text=query_text,
+            text_fields=[
+                cand_full.get("name", ""),
+                cand_full.get("position", ""),
+                cand_full.get("status", ""),
+                cand_full.get("code", ""),
+                cand_full.get("location", "")
+            ],
+            extracted_keywords=cand_full.get("extracted_keywords", []),
+            doc_embedding=cand_full.get("embedding"),
+            q_vec=q_vec,
+            query_skills=query_skills,
+            is_dense=is_dense
+        )
 
-        # Keyword match
-        skills = [s.lower() for s in cand_full.get("extracted_keywords") or []]
-        name = (cand_full.get("name") or "").lower()
-        pos = (cand_full.get("position") or "").lower()
-        status = (cand_full.get("status") or "").lower()
-
-        kw_match = 0.0
-        if query_text in name or query_text in pos or query_text in status:
-            kw_match += 0.5
-        for s in skills:
-            if s in query_text or query_text in s:
-                kw_match += 0.3
-
-        total_score = round(min(100.0, (sem_score * 50.0) + (kw_match * 50.0)), 1)
-        c["query_relevance"] = total_score
-        scored_cands.append(c)
+        if relevance >= min_score:
+            c["query_relevance"] = relevance
+            scored_cands.append(c)
 
     scored_cands.sort(key=lambda x: x.get("query_relevance", 0.0), reverse=True)
     return scored_cands

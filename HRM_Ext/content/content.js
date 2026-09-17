@@ -329,6 +329,17 @@
   }
 
   /**
+   * Render CV action links badge without icons
+   */
+  function renderCvActionLinks(cvUrls) {
+    if (!Array.isArray(cvUrls) || cvUrls.length === 0) return '';
+    return cvUrls.map((url, i) => {
+      const label = cvUrls.length === 1 ? 'CV' : `CV ${i + 1}`;
+      return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="hrm-ext-cv-btn" title="Open CV document">${label}</a>`;
+    }).join(' ');
+  }
+
+  /**
    * Main Drawer View Renderers
    */
 
@@ -352,7 +363,6 @@
         <div class="hrm-ext-tabs">
           <button class="hrm-ext-tab-btn ${activeTabName === 'table' ? 'active' : ''}" type="button" data-tab="table">Candidates Table (${candsCount})</button>
           <button class="hrm-ext-tab-btn ${activeTabName === 'spec' ? 'active' : ''}" type="button" data-tab="spec">Job Request Details</button>
-          <button class="hrm-ext-tab-btn ${activeTabName === 'json' ? 'active' : ''}" type="button" data-tab="json">Raw JSON</button>
         </div>
       `;
 
@@ -361,12 +371,7 @@
         if (cands.length > 0) {
           let rowsHtml = '';
           cands.forEach((cand, idx) => {
-            const cvButtonsHtml = Array.isArray(cand.cvs) && cand.cvs.length > 0
-              ? cand.cvs.map((url, i) => {
-                  const label = cand.cvs.length === 1 ? 'CV' : `CV ${i + 1}`;
-                  return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="hrm-ext-cv-btn" title="Open CV document">${label}</a>`;
-                }).join(' ')
-              : '';
+            const cvButtonsHtml = renderCvActionLinks(cand.cvs);
 
             rowsHtml += `
               <tr>
@@ -464,8 +469,11 @@
             <tr>
               <td style="width: 36px; text-align: center; font-weight: 600; color: #64748b;">${idx + 1}</td>
               <td>
-                <div style="font-weight: 600; color: #1e293b;">${escapeHtml(c.name || 'Unknown')}</div>
-                <div style="font-size: 11px; color: #64748b;">${escapeHtml(c.code || '')} • ${escapeHtml(c.position || '')} • ${escapeHtml(c.location || '')}</div>
+                <div style="display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                  <span style="font-weight: 600; color: #1e293b;">${escapeHtml(c.name || 'Unknown')}</span>
+                  ${renderCvActionLinks(c.cv_urls)}
+                </div>
+                <div style="font-size: 11px; color: #64748b; margin-top: 2px;">${escapeHtml(c.code || '')} • ${escapeHtml(c.position || '')} • ${escapeHtml(c.location || '')}</div>
               </td>
               <td>${renderStatusBadge(c.status)}</td>
               <td style="font-size: 12px; color: #334155; max-width: 260px;">${escapeHtml(c.matched_experience || 'Experience aligns with job.')}</td>
@@ -610,7 +618,10 @@
           <div style="background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0;">
             <div style="display: flex; justify-content: space-between; align-items: center;">
               <div>
-                <div style="font-size: 14px; font-weight: 700; color: #1e293b;">${escapeHtml(selectedCandidate.name || 'Candidate')}</div>
+                <div style="display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                  <span style="font-size: 14px; font-weight: 700; color: #1e293b;">${escapeHtml(selectedCandidate.name || 'Candidate')}</span>
+                  ${renderCvActionLinks(selectedCandidate.cv_urls)}
+                </div>
                 <div style="font-size: 12px; color: #475569; margin-top: 2px;">${escapeHtml(selectedCandidate.position || '')} • ${escapeHtml(selectedCandidate.location || '')}</div>
               </div>
               <div>${renderStatusBadge(selectedCandidate.status)}</div>
@@ -644,12 +655,20 @@
           ? c.extracted_keywords.slice(0, 4).map(s => `<span class="hrm-ext-skill-tag">${escapeHtml(s)}</span>`).join(' ')
           : '';
 
+        const relevanceBadge = c.query_relevance !== undefined
+          ? `<span class="hrm-ext-badge status-purple" style="margin-left: 6px;">${c.query_relevance}% match</span>`
+          : '';
+
         rows += `
           <tr>
             <td style="width: 36px; text-align: center; font-weight: 600; color: #64748b;">${idx + 1}</td>
             <td>
-              <div style="font-weight: 600; color: #1e293b;">${escapeHtml(c.name || 'Candidate')}</div>
-              <div style="font-size: 11px; color: #64748b;">${escapeHtml(c.code || '')} • ${escapeHtml(c.position || '')} • ${escapeHtml(c.location || '')}</div>
+              <div style="display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                <span style="font-weight: 600; color: #1e293b;">${escapeHtml(c.name || 'Candidate')}</span>
+                ${relevanceBadge}
+                ${renderCvActionLinks(c.cv_urls)}
+              </div>
+              <div style="font-size: 11px; color: #64748b; margin-top: 2px;">${escapeHtml(c.code || '')} • ${escapeHtml(c.position || '')} • ${escapeHtml(c.location || '')}</div>
               <div style="margin-top: 4px;">${skillsList}</div>
             </td>
             <td>${renderStatusBadge(c.status)}</td>
@@ -709,10 +728,10 @@
   // 4. Backend Settings View
   function renderSettingsView() {
     const currentModelInfo = availableModels.find(m => m.id === activeModel) || {
-      id: activeModel || 'BAAI/bge-small-en-v1.5',
-      name: activeModel ? activeModel.split('/').pop() : 'BGE Small English (Default)',
-      dim: 384,
-      size: '~67MB'
+      id: activeModel || 'BAAI/bge-large-en-v1.5',
+      name: activeModel ? activeModel.split('/').pop() : 'BGE Large EN v1.5 (Default)',
+      dim: 1024,
+      size: '~1.2GB'
     };
 
     const modelOptionsHtml = availableModels.map(m => `
@@ -1025,8 +1044,8 @@
       applyModelBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const chosenModel = modelSelect.value;
-        const currentModelObj = availableModels.find(m => m.id === activeModel) || { id: activeModel, name: activeModel || 'Current Model', dim: 384 };
-        const newModelObj = availableModels.find(m => m.id === chosenModel) || { id: chosenModel, name: chosenModel, dim: 384 };
+        const currentModelObj = availableModels.find(m => m.id === activeModel) || { id: activeModel, name: activeModel || 'Current Model', dim: 1024 };
+        const newModelObj = availableModels.find(m => m.id === chosenModel) || { id: chosenModel, name: chosenModel, dim: 1024 };
 
         if (chosenModel === activeModel) {
           if (modelFeedbackEl) {
@@ -1519,6 +1538,8 @@
         id: jobReqRaw?.id || jobRequestId,
         title: jobReqRaw?.title || jobReqRaw?.name || null,
         code: jobReqRaw?.code || null,
+        level: jobReqRaw?.level || null,
+        levelCandidate: jobReqRaw?.levelCandidate || null,
         request: jobReqRaw?.request || null,
         jobDescription: jobReqRaw?.jobDescription || null,
         raw_data: jobReqRaw
@@ -1543,6 +1564,7 @@
               position: item?.cv?.position || null,
               location: item?.cv?.location || null,
               status: item?.status || item?.cv?.status || 'OPEN',
+              level: item?.cv?.level || item?.level || null,
               cvs: Array.isArray(cvFiles) ? cvFiles : [cvFiles],
               cvInformation: item?.cv?.cvInformation || null,
               experience: item?.cv?.experience || null,
@@ -1598,6 +1620,13 @@
         try {
           await fetchJobRequestAndCandidates(detectedJobRequestId);
         } catch (e) {}
+      }
+    } else {
+      if (currentJobRequestId !== null) {
+        console.log(`[HRM Extension] Navigated away from Job Request page (was ${currentJobRequestId}). Resetting active state.`);
+        currentJobRequestId = null;
+        updateIndicator('idle', 'HRM Extension: Idle (Navigate to a Job Request)');
+        updateDrawerContent();
       }
     }
   }

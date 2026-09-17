@@ -129,7 +129,7 @@ class TestHRMBackend(unittest.TestCase):
         vec2 = model.get_embedding("Automated test engineer writing Python scripts")
         vec3 = model.get_embedding("Cooking Vietnamese traditional soup with vegetables")
 
-        self.assertEqual(len(vec1), 384)
+        self.assertEqual(len(vec1), model.dim)
         sim_relevant = LocalSemanticModel.cosine_similarity(vec1, vec2)
         sim_irrelevant = LocalSemanticModel.cosine_similarity(vec1, vec3)
 
@@ -210,7 +210,8 @@ class TestHRMBackend(unittest.TestCase):
                 extracted_job = extract_job_keywords(
                     job_raw.get("title", ""),
                     job_raw.get("request", ""),
-                    job_raw.get("jobDescription", "")
+                    job_raw.get("jobDescription", ""),
+                    raw_level=job_raw.get("levelCandidate") or job_raw.get("level")
                 )
                 save_or_update_job({
                     "id": job_raw["id"],
@@ -230,12 +231,17 @@ class TestHRMBackend(unittest.TestCase):
                 cand_list = json.loads(content[json_start:])
                 for item in cand_list:
                     cv = item.get("cv", {})
+                    cand_urls = json.loads(cv.get("cvs", "[]")) if isinstance(cv.get("cvs"), str) else cv.get("cvs", [])
                     extracted_cand = extract_candidate_keywords(
                         name=cv.get("name", ""),
                         position=cv.get("position", ""),
                         location=cv.get("location", ""),
                         cv_information=cv.get("cvInformation"),
-                        raw_status=item.get("status")
+                        raw_status=item.get("status"),
+                        raw_level=cv.get("level"),
+                        raw_experience=cv.get("experience"),
+                        cv_urls=cand_urls,
+                        raw_languages=cv.get("languages")
                     )
                     save_or_update_candidate({
                         "id": cv.get("id") or item.get("id"),
@@ -245,7 +251,7 @@ class TestHRMBackend(unittest.TestCase):
                         "position": cv.get("position"),
                         "location": cv.get("location"),
                         "status": item.get("status", "OPEN"),
-                        "cv_urls": json.loads(cv.get("cvs", "[]")) if isinstance(cv.get("cvs"), str) else cv.get("cvs", []),
+                        "cv_urls": cand_urls,
                         "extracted_keywords": extracted_cand["skills"],
                         "extracted_level": extracted_cand["level"],
                         "embedding": extracted_cand["embedding"]
@@ -436,16 +442,64 @@ class TestHRMBackend(unittest.TestCase):
                 "request": "React, TypeScript, CSS, HTML"
             })
 
-            # Search C++
+            # Search C++ (filters out unrelated React Developer)
             res = client.get("/api/jobs?q=C%2B%2B")
             self.assertEqual(res.status_code, 200)
             jobs = res.json()
-            self.assertEqual(len(jobs), 2)
+            self.assertEqual(len(jobs), 1)
             self.assertEqual(jobs[0]["id"], "search-job-1")
-            self.assertGreater(jobs[0]["query_relevance"], jobs[1]["query_relevance"])
+            self.assertGreater(jobs[0]["query_relevance"], 40.0)
+
+            # Dump word query returns 0 jobs
+            res_dump = client.get("/api/jobs?q=dumpwordasdfghjkl")
+            self.assertEqual(res_dump.status_code, 200)
+            self.assertEqual(len(res_dump.json()), 0)
+
+            # Query with min_score=0 returns all jobs ranked
+            res_all = client.get("/api/jobs?q=C%2B%2B&min_score=0")
+            self.assertEqual(res_all.status_code, 200)
+            all_ranked = res_all.json()
+            self.assertEqual(len(all_ranked), 2)
+            self.assertEqual(all_ranked[0]["id"], "search-job-1")
+            self.assertGreater(all_ranked[0]["query_relevance"], all_ranked[1]["query_relevance"])
+
+    def test_candidate_semantic_search(self):
+        """Test GET /api/candidates?q=... semantic filtering and relevance score."""
+        from fastapi.testclient import TestClient
+        from app import app
+
+        with TestClient(app) as client:
+            client.post("/api/candidates", json={
+                "id": "search-cand-1",
+                "name": "Ho Le Minh Hai",
+                "position": "Tester",
+                "status": "PM_ROUND",
+                "extracted_keywords": ["python", "testing knowledge", "system test"]
+            })
+            client.post("/api/candidates", json={
+                "id": "search-cand-2",
+                "name": "Tran Van B",
+                "position": "Frontend Developer",
+                "status": "OPEN",
+                "extracted_keywords": ["react", "javascript", "css"]
+            })
+
+            # Search Tester -> returns only cand-1
+            res = client.get("/api/candidates?q=Tester")
+            self.assertEqual(res.status_code, 200)
+            cands = res.json()
+            self.assertEqual(len(cands), 1)
+            self.assertEqual(cands[0]["id"], "search-cand-1")
+            self.assertIn("query_relevance", cands[0])
+            self.assertGreater(cands[0]["query_relevance"], 40.0)
+
+            # Search with dump word -> returns 0 candidates
+            res_dump = client.get("/api/candidates?q=asdfghjklgibberish")
+            self.assertEqual(res_dump.status_code, 200)
+            self.assertEqual(len(res_dump.json()), 0)
 
     def test_model_selection(self):
-        """Test GET /api/models and POST /api/models/select."""
+        """Test GET /api/models and POST /api/models/select for Base and Large models."""
         from fastapi.testclient import TestClient
         from app import app
 
@@ -455,17 +509,23 @@ class TestHRMBackend(unittest.TestCase):
             data = res.json()
             self.assertIn("models", data)
             self.assertGreaterEqual(len(data["models"]), 3)
-            self.assertIn("active_model", data)
+            self.assertEqual(data["active_model"], "BAAI/bge-large-en-v1.5")
 
-            # Switch model
-            new_model = "sentence-transformers/all-MiniLM-L6-v2"
+            # Verify only Base and Large models are present (dim 768 or 1024), no small models
+            for m in data["models"]:
+                self.assertNotIn("small", m["id"].lower())
+                self.assertNotIn("minilm", m["id"].lower())
+                self.assertIn(m["dim"], (768, 1024))
+
+            # Switch model to base model
+            new_model = "BAAI/bge-base-en-v1.5"
             res_switch = client.post("/api/models/select", json={"model_name": new_model})
             self.assertEqual(res_switch.status_code, 200)
             self.assertEqual(res_switch.json()["active_model"], new_model)
             self.assertFalse(res_switch.json()["database_cleared"])
 
             # Switch model with clear_database=True
-            res_switch_clear = client.post("/api/models/select", json={"model_name": "BAAI/bge-small-en-v1.5", "clear_database": True})
+            res_switch_clear = client.post("/api/models/select", json={"model_name": "thenlper/gte-large", "clear_database": True})
             self.assertEqual(res_switch_clear.status_code, 200)
             self.assertTrue(res_switch_clear.json()["database_cleared"])
 

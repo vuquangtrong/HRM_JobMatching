@@ -2,80 +2,94 @@
 
 A Manifest V3 browser extension built for Google Chrome and Microsoft Edge to extract recruitment data from the LTS Group HRM portal (`https://hrm.ltsgroup.tech/recruitment`).
 
-This extension acts as the client-side data extractor for the **HRM_JobMatching** platform, gathering job request specifications and candidate CV attachments to be processed by `HRM_Backend`.
+This extension acts as the client-side data extractor and interactive recruitment intelligence workstation for the **HRM_JobMatching** platform, gathering job request specifications and candidate CV attachments to be processed and matched by `HRM_Backend`.
 
 ---
 
 ## Features
 
-### 1. SPA Route Detection
-
-- Monitors client-side Single Page Application (SPA) navigation.
-- Automatically triggers when navigating to a Job Request candidate route:
-
+### 1. Robust Triple-Layer SPA Navigation (State Stuck Fix)
+- Prevents UI state freeze across client-side Single Page Application (SPA) transitions via a 3-layer architecture:
+  1. **Background Service Worker (`service-worker.js`)**: Listens to browser-level events via `chrome.webNavigation.onHistoryStateUpdated` and `chrome.tabs.onUpdated`.
+  2. **Main-World Bridge (`bridge.js`)**: Intercepts `window.history.pushState` and `window.history.replaceState` in the page context, dispatching custom `hrm-spa-navigate` events.
+  3. **Content Script Observer (`content.js`)**: Employs URL change polling and DOM mutation observation to guarantee state recovery during rapid route switching or back/forward navigation.
+- Automatically triggers extraction when navigating to a Job Request candidate route:
   ```text
   https://hrm.ltsgroup.tech/recruitment/job-requests/candidate/<jobRequestsId>
   ```
 
-  *(Note: `<jobRequestsId>` is the Job Request ID containing candidate applications).*
-
 ### 2. Dual API Data Extraction & Candidate Status
-
 - Automatically reads the authentication Bearer token from `localStorage.auth_tconnect`.
 - Concurrently queries both HRM backend endpoints:
   - **Job Request Endpoint**: `GET https://hrm.ltsgroup.tech/api/job-requests/<jobRequestsId>`
   - **Candidates Endpoint**: `GET https://hrm.ltsgroup.tech/api/candidate/candidates/<jobRequestsId>`
 - Extracts strictly targeted fields:
   - **Job Request**: `id`, `title`, `code`, `request`, `jobDescription`
-  - **Candidates**: `id`, `code`, `name`, `position`, `location`, `status` (e.g. `PM_ROUND`, `OPEN`), `cvs` (PDF URLs), `cvInformation`, `experience`
-- **Auto-Sync to Backend**: Automatically transmits extracted job and candidate records to `HRM_Backend` on port `8765` for NLP analysis and precalculated matching.
+  - **Candidates**: `id`, `code`, `name`, `position`, `location`, `status` (e.g. `PM_ROUND`, `OPEN`, `OFFER`, `INTERVIEW`), `cvs` (PDF URLs), `cvInformation`, `experience`
+- **Auto-Sync to Backend**: Automatically transmits extracted job and candidate records to `HRM_Backend` on port `8765` for AI keyword parsing, dense embeddings, and precalculated matching.
 
-### 3. Shadow DOM Encapsulated In-Page Widget
+### 3. Direct CV Action Links Across All Tables
+- Clickable PDF action links (e.g. `[CV 1]`, `[CV 2]`) are rendered inline directly next to the candidate's name across **all** views:
+  - **Active Page Candidates Table**
+  - **Job Details Matching Candidates Table**
+  - **Candidate Search Results Table**
+- Clicking opens the candidate's CV directly in a new browser tab with HRM session authentication headers.
 
-- Injects a floating widget encapsulated in an Open Shadow Root (`attachShadow({ mode: 'open' })`) to prevent host page CSS conflicts.
-- Visual status indicators conform to design rules (color-coded status dots without generated icons):
+### 4. Shadow DOM Encapsulated In-Page Widget
+- Injects a floating widget encapsulated in an Open Shadow Root (`attachShadow({ mode: 'open' })`) to prevent host page CSS pollution.
+- Visual status indicators conform strictly to design rules (color-coded status dots without generated icons):
   - ⚪ **Gray (Idle)**: Injected and idle on non-candidate pages.
   - 🔵 **Blue (Active)**: Candidate job request route detected.
   - 🟡 **Amber (Loading)**: Actively querying HRM APIs.
-  - 🟢 **Green (Success)**: Data loaded successfully, displays candidate count badge on the floating button.
+  - 🟢 **Green (Success)**: Data loaded successfully; displays candidate count badge on the floating button.
   - 🔴 **Red (Error)**: Network error or authentication missing.
 
-### 4. Multi-Page In-Page Drawer
-
+### 5. Multi-Page In-Page Drawer & Workspace
 - **Header Actions**:
   - **Live Backend Sync Badge**: Shows real-time synchronization state with backend (`Synced (X new, Y upd)`, `Sync Error`, or `Backend Ready`).
   - **Resync Button**: Manually triggers synchronization of the current job request and candidates to backend.
   - **Expand Button (`⤢` / `🗗`)**: Toggles normal widget drawer and full-screen workspace view.
   - **Close Button (`×`)**: Closes drawer view.
 - **Main Navigation Bar**:
-  - **Active Page**: Current HRM job request details, candidate table with colored status badges (`PM_ROUND`, `OPEN`, etc.), spec viewer, and raw JSON inspection.
+  - **Active Page**: Current HRM job request details, candidate table with colored status badges (`PM_ROUND` = purple, `OPEN` = green, `OFFER` = emerald, etc.), spec viewer, and inline CV links.
   - **All Jobs (Matching & Semantic Search)**:
-    - Lists all saved jobs from `HRM_Backend` with immediate auto-refresh when a new job is ingested.
-    - **Semantic Search**: Natural language search box (e.g. `C++ automotive`, `Python tester`) powered by dense cosine similarity embeddings.
+    - Lists all saved jobs from `HRM_Backend` with immediate auto-refresh upon ingestion.
+    - **Calibrated Semantic Search**: Natural language search box (e.g. `C++ automotive`, `Python tester`) powered by dense cosine embeddings; unrelated or dump queries return 0 results.
     - Selecting a job displays pre-calculated matching candidates:
-      - `Candidate Name` (with CV links)
+      - `Candidate Name` (with inline CV links)
       - `Status` (color-coded badge)
       - `Matched Experience`
       - `Matching Percentage` (progress bar + percentage)
-  - **Search Candidates**: Free-text query prompt to search candidates across all saved records. Selecting a candidate displays pre-calculated matching jobs:
-    - `Job Title` & `Code`
-    - `Matched Requests`
-    - `Matching Percentage` (progress bar + percentage)
+  - **Search Candidates (with Match Score Badges)**:
+    - Free-text query prompt to search candidates across all saved records.
+    - Displays relevance score badge (`${c.query_relevance}% match`) in purple alongside Candidate Name.
+    - Dump/gibberish queries (`dump word`, `asdfghjkl`) return 0 results with helpful suggestions.
+    - Selecting a candidate displays pre-calculated matching jobs:
+      - `Job Title` & `Code`
+      - `Matched Requests`
+      - `Matching Percentage` (progress bar + percentage)
   - **Settings**:
     - **Backend Service URL**: Configure backend endpoint (default: `http://localhost:8765`) and test connection health.
-    - **Local AI Semantic Model Selection**: Switch between pre-configured local ONNX models (e.g., `BAAI/bge-small-en-v1.5`, `sentence-transformers/all-MiniLM-L6-v2`, `BAAI/bge-base-en-v1.5`).
+    - **Local AI Semantic Model Selection**: Switch between pre-configured Base and Large local ONNX models:
+      - `BAAI/bge-large-en-v1.5` (**Default - Recommended for Maximum Accuracy**, 1024-dim)
+      - `BAAI/bge-base-en-v1.5` (High Accuracy Base, 768-dim)
+      - `mixedbread-ai/mxbai-embed-large-v1` (SOTA English Large, 1024-dim)
+      - `thenlper/gte-large` (General Text Embeddings Large, 1024-dim)
+      - `thenlper/gte-base` (General Text Embeddings Base, 768-dim)
+      - `snowflake/snowflake-arctic-embed-m` (Snowflake Arctic Base, 768-dim)
+      - `snowflake/snowflake-arctic-embed-l` (Snowflake Arctic Large, 1024-dim)
+      - `jinaai/jina-embeddings-v2-base-en` (Long Context 8K Base, 768-dim)
     - **Database Management**: One-click confirmation to clear all stored database records (`/api/database/clear`).
 
 ---
 
 ## Extracted Data Schema
 
-The sample reponses:
+Sample responses:
+- `HRM_Ext/sample_response_fetch_job-requests.json`
+- `HRM_Ext/sample_response_fetch_candidate_candidates.json`
 
-- HRM_Ext/sample_response_fetch_job-requests.json
-- HRM_Ext/sample_response_fetch_candidate_candidates.json
-
-Then the extracted data from all fetches:
+Extracted payload structure:
 
 ```json
 {
@@ -94,6 +108,7 @@ Then the extracted data from all fetches:
       "name": "Nguyễn Văn Cương",
       "position": "Tester",
       "location": "Ha Noi",
+      "status": "PM_ROUND",
       "cvs": [
         "https://hrm.ltsgroup.tech/api/cvs/nguyen-van-cuong-test-embedded/cvs-19268c47-79a4-4e30-9ec1-bbed78b60359-1789356178960.pdf"
       ]

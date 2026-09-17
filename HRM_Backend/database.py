@@ -13,11 +13,17 @@ DB_PATH = os.environ.get("HRM_DB_PATH", os.path.join(os.path.dirname(__file__), 
 
 
 def get_db_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
-    """Creates a sqlite3 connection with Row factory enabled."""
+    """Creates a sqlite3 connection with Row factory and WAL mode enabled."""
     target_path = db_path or os.environ.get("HRM_DB_PATH", os.path.join(os.path.dirname(__file__), "hrm_matching.db"))
-    conn = sqlite3.connect(target_path)
+    dir_name = os.path.dirname(os.path.abspath(target_path))
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
+    conn = sqlite3.connect(target_path, timeout=15.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA busy_timeout = 5000;")
+    conn.execute("PRAGMA synchronous = NORMAL;")
     return conn
 
 
@@ -85,15 +91,15 @@ def init_db(db_path: Optional[str] = None) -> None:
 
             # Fast lookup indices
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_matches_job_score 
+                CREATE INDEX IF NOT EXISTS idx_matches_job_score
                 ON job_candidate_matches (job_id, matching_percentage DESC);
             """)
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_matches_candidate_score 
+                CREATE INDEX IF NOT EXISTS idx_matches_candidate_score
                 ON job_candidate_matches (candidate_id, matching_percentage DESC);
             """)
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_candidates_status 
+                CREATE INDEX IF NOT EXISTS idx_candidates_status
                 ON candidates (status);
             """)
     finally:
@@ -109,9 +115,10 @@ def save_or_update_job(job_data: Dict[str, Any], db_path: Optional[str] = None) 
     conn = get_db_connection(db_path)
     now = datetime.now(timezone.utc).isoformat()
     job_id = str(job_data["id"])
-    
-    extracted_keywords = json.dumps(job_data.get("extracted_keywords", []))
-    embedding = json.dumps(job_data.get("embedding", [])) if job_data.get("embedding") is not None else None
+
+    extracted_keywords = json.dumps(job_data["extracted_keywords"]) if job_data.get("extracted_keywords") is not None else None
+    extracted_level = job_data.get("extracted_level") or None
+    embedding = json.dumps(job_data["embedding"]) if job_data.get("embedding") is not None else None
     raw_data = json.dumps(job_data.get("raw_data", {}))
 
     try:
@@ -141,7 +148,7 @@ def save_or_update_job(job_data: Dict[str, Any], db_path: Optional[str] = None) 
                 job_data.get("request") or "",
                 job_data.get("job_description") or "",
                 extracted_keywords,
-                job_data.get("extracted_level") or "",
+                extracted_level,
                 embedding,
                 raw_data,
                 now,
@@ -173,7 +180,7 @@ def get_all_jobs(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     conn = get_db_connection(db_path)
     try:
         rows = conn.execute("""
-            SELECT j.*, 
+            SELECT j.*,
                    COUNT(m.candidate_id) AS matched_candidates_count,
                    MAX(m.matching_percentage) AS top_match_percentage
             FROM jobs j
@@ -193,6 +200,22 @@ def get_all_jobs(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
         conn.close()
 
 
+def get_all_jobs_with_embeddings(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Retrieves all jobs with parsed embeddings and keywords in a single query."""
+    conn = get_db_connection(db_path)
+    try:
+        rows = conn.execute("SELECT * FROM jobs ORDER BY updated_at DESC").fetchall()
+        jobs = []
+        for r in rows:
+            item = dict(r)
+            item["extracted_keywords"] = json.loads(item["extracted_keywords"] or "[]")
+            item["embedding"] = json.loads(item["embedding"] or "[]") if item.get("embedding") else None
+            jobs.append(item)
+        return jobs
+    finally:
+        conn.close()
+
+
 # ==========================================
 # Candidates CRUD
 # ==========================================
@@ -204,9 +227,11 @@ def save_or_update_candidate(cand_data: Dict[str, Any], db_path: Optional[str] =
     cand_id = str(cand_data["id"])
 
     cv_urls = json.dumps(cand_data.get("cv_urls", []))
-    extracted_keywords = json.dumps(cand_data.get("extracted_keywords", []))
-    extracted_experiences = json.dumps(cand_data.get("extracted_experiences", {}))
-    embedding = json.dumps(cand_data.get("embedding", [])) if cand_data.get("embedding") is not None else None
+    cv_text = cand_data.get("cv_text") or None
+    extracted_keywords = json.dumps(cand_data["extracted_keywords"]) if cand_data.get("extracted_keywords") is not None else None
+    extracted_experiences = json.dumps(cand_data["extracted_experiences"]) if cand_data.get("extracted_experiences") is not None else None
+    extracted_level = cand_data.get("extracted_level") or None
+    embedding = json.dumps(cand_data["embedding"]) if cand_data.get("embedding") is not None else None
     raw_data = json.dumps(cand_data.get("raw_data", {}))
 
     try:
@@ -244,10 +269,10 @@ def save_or_update_candidate(cand_data: Dict[str, Any], db_path: Optional[str] =
                 cand_data.get("location") or "",
                 cand_data.get("status") or "OPEN",
                 cv_urls,
-                cand_data.get("cv_text") or "",
+                cv_text,
                 extracted_keywords,
                 extracted_experiences,
-                cand_data.get("extracted_level") or "",
+                extracted_level,
                 embedding,
                 raw_data,
                 now,
@@ -289,6 +314,24 @@ def get_all_candidates(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
             res["extracted_experiences"] = json.loads(res["extracted_experiences"] or "{}")
             res["embedding"] = None  # Don't serialize heavy vector
             res["raw_data"] = None
+            cands.append(res)
+        return cands
+    finally:
+        conn.close()
+
+
+def get_all_candidates_with_embeddings(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Retrieves all candidates with parsed embeddings and keywords in a single query."""
+    conn = get_db_connection(db_path)
+    try:
+        rows = conn.execute("SELECT * FROM candidates ORDER BY updated_at DESC").fetchall()
+        cands = []
+        for r in rows:
+            res = dict(r)
+            res["cv_urls"] = json.loads(res["cv_urls"] or "[]")
+            res["extracted_keywords"] = json.loads(res["extracted_keywords"] or "[]")
+            res["extracted_experiences"] = json.loads(res["extracted_experiences"] or "{}")
+            res["embedding"] = json.loads(res["embedding"] or "[]") if res.get("embedding") else None
             cands.append(res)
         return cands
     finally:
@@ -345,6 +388,51 @@ def save_match_result(
         conn.close()
 
 
+def save_match_results_batch(
+    matches_list: List[Dict[str, Any]],
+    db_path: Optional[str] = None
+) -> int:
+    """Inserts or updates multiple pre-calculated match records in SQLite in a single transaction."""
+    if not matches_list:
+        return 0
+
+    conn = get_db_connection(db_path)
+    now = datetime.now(timezone.utc).isoformat()
+    rows = []
+    for m in matches_list:
+        rows.append((
+            m["job_id"],
+            m["candidate_id"],
+            round(m["matching_percentage"], 1),
+            round(m.get("semantic_score", 0.0), 3),
+            round(m.get("skills_score", 0.0), 3),
+            json.dumps(m.get("matched_skills", [])),
+            m.get("matched_experience", ""),
+            m.get("matched_requests", ""),
+            now
+        ))
+
+    try:
+        with conn:
+            conn.executemany("""
+                INSERT INTO job_candidate_matches (
+                    job_id, candidate_id, matching_percentage, semantic_score,
+                    skills_score, matched_skills, matched_experience, matched_requests, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id, candidate_id) DO UPDATE SET
+                    matching_percentage = excluded.matching_percentage,
+                    semantic_score = excluded.semantic_score,
+                    skills_score = excluded.skills_score,
+                    matched_skills = excluded.matched_skills,
+                    matched_experience = excluded.matched_experience,
+                    matched_requests = excluded.matched_requests,
+                    updated_at = excluded.updated_at;
+            """, rows)
+        return len(rows)
+    finally:
+        conn.close()
+
+
 def get_matching_candidates_for_job(job_id: str, limit: int = 100, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Returns pre-calculated candidates matching a job, sorted by matching percentage descending.
@@ -353,7 +441,7 @@ def get_matching_candidates_for_job(job_id: str, limit: int = 100, db_path: Opti
     conn = get_db_connection(db_path)
     try:
         rows = conn.execute("""
-            SELECT 
+            SELECT
                 c.id, c.code, c.name, c.position, c.location, c.status, c.cv_urls,
                 m.matching_percentage, m.semantic_score, m.skills_score,
                 m.matched_skills, m.matched_experience, m.matched_requests, m.updated_at
@@ -383,7 +471,7 @@ def get_matching_jobs_for_candidate(candidate_id: str, limit: int = 100, db_path
     conn = get_db_connection(db_path)
     try:
         rows = conn.execute("""
-            SELECT 
+            SELECT
                 j.id, j.title, j.title AS job_title, j.code, j.request,
                 m.matching_percentage, m.semantic_score, m.skills_score,
                 m.matched_skills, m.matched_experience, m.matched_requests, m.updated_at
