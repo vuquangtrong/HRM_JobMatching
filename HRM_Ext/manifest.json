@@ -60,6 +60,8 @@
     "tabs"
   ],
   "host_permissions": [
-    "https://hrm.ltsgroup.tech/*"
+    "https://hrm.ltsgroup.tech/*",
+    "http://localhost:8765/*",
+    "http://127.0.0.1:8765/*"
   ]
 }

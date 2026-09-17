@@ -19,57 +19,63 @@ This extension acts as the client-side data extractor for the **HRM_JobMatching*
 
   *(Note: `<jobRequestsId>` is the Job Request ID containing candidate applications).*
 
-### 2. Dual API Data Extraction
+### 2. Dual API Data Extraction & Candidate Status
 
 - Automatically reads the authentication Bearer token from `localStorage.auth_tconnect`.
 - Concurrently queries both HRM backend endpoints:
   - **Job Request Endpoint**: `GET https://hrm.ltsgroup.tech/api/job-requests/<jobRequestsId>`
   - **Candidates Endpoint**: `GET https://hrm.ltsgroup.tech/api/candidate/candidates/<jobRequestsId>`
 - Extracts strictly targeted fields:
-  - **Job Request**:
-    - `id`: Job request unique ID
-    - `title`: Job request title
-    - `request`: Summary of requirements
-    - `jobDescription`: Main job description (HTML format)
-  - **Candidates**:
-    - `id`: Unique CV ID
-    - `code`: Candidate code (e.g., `C10455`)
-    - `name`: Candidate full name
-    - `position`: Applied position (e.g., `Tester`, `Developer`)
-    - `location`: Location / city (e.g., `Ha Noi`)
-    - `cvs`: Array of direct PDF file URLs
+  - **Job Request**: `id`, `title`, `code`, `request`, `jobDescription`
+  - **Candidates**: `id`, `code`, `name`, `position`, `location`, `status` (e.g. `PM_ROUND`, `OPEN`), `cvs` (PDF URLs), `cvInformation`, `experience`
+- **Auto-Sync to Backend**: Automatically transmits extracted job and candidate records to `HRM_Backend` on port `8765` for NLP analysis and precalculated matching.
 
 ### 3. Shadow DOM Encapsulated In-Page Widget
 
-- Injects a lightweight floating button and status dot onto the page.
-- Encapsulated in an **Open Shadow Root** (`attachShadow({ mode: 'open' })`) to prevent host page CSS frameworks from conflicting with extension styles and vice versa.
-- Visual status indicators conform to design rules (color-coded dots without generated icons):
+- Injects a floating widget encapsulated in an Open Shadow Root (`attachShadow({ mode: 'open' })`) to prevent host page CSS conflicts.
+- Visual status indicators conform to design rules (color-coded status dots without generated icons):
   - ⚪ **Gray (Idle)**: Injected and idle on non-candidate pages.
   - 🔵 **Blue (Active)**: Candidate job request route detected.
   - 🟡 **Amber (Loading)**: Actively querying HRM APIs.
   - 🟢 **Green (Success)**: Data loaded successfully, displays candidate count badge on the floating button.
   - 🔴 **Red (Error)**: Network error or authentication missing.
 
-### 4. In-Page Drawer
+### 4. Multi-Page In-Page Drawer
 
-- **Interactive Drawer**: Clicking the floating button on the page (or clicking the extension icon in the browser toolbar) toggles the drawer. Shows **Job Title**, and candidates count.
 - **Header Actions**:
-  - **`Fetch Data`**: Small header button to fetch or refresh recruitment data.
-  - **`⤢` (Full Page)**: Expands drawer to fill the entire viewport for viewing data in a full-screen layout.
-  - **(Close)**: Closes the drawer.
-- **Tabbed Views & Candidate Table**:
-  - **Candidates Table**: Interactive table displaying:
-    - `#` (Index)
-    - `Candidate Name` with an inline **📄** button to view candidate documents
-    - `Code`
-    - `Position`
-    - `Location`
-  - **Job Request Details**: Structured overview of request summary, and job description.
-  - **Raw JSON**: Syntax-styled JSON viewer.
+  - **Live Backend Sync Badge**: Shows real-time synchronization state with backend (`Synced (X new, Y upd)`, `Sync Error`, or `Backend Ready`).
+  - **Resync Button**: Manually triggers synchronization of the current job request and candidates to backend.
+  - **Expand Button (`⤢` / `🗗`)**: Toggles normal widget drawer and full-screen workspace view.
+  - **Close Button (`×`)**: Closes drawer view.
+- **Main Navigation Bar**:
+  - **Active Page**: Current HRM job request details, candidate table with colored status badges (`PM_ROUND`, `OPEN`, etc.), spec viewer, and raw JSON inspection.
+  - **All Jobs (Matching & Semantic Search)**:
+    - Lists all saved jobs from `HRM_Backend` with immediate auto-refresh when a new job is ingested.
+    - **Semantic Search**: Natural language search box (e.g. `C++ automotive`, `Python tester`) powered by dense cosine similarity embeddings.
+    - Selecting a job displays pre-calculated matching candidates:
+      - `Candidate Name` (with CV links)
+      - `Status` (color-coded badge)
+      - `Matched Experience`
+      - `Matching Percentage` (progress bar + percentage)
+  - **Search Candidates**: Free-text query prompt to search candidates across all saved records. Selecting a candidate displays pre-calculated matching jobs:
+    - `Job Title` & `Code`
+    - `Matched Requests`
+    - `Matching Percentage` (progress bar + percentage)
+  - **Settings**:
+    - **Backend Service URL**: Configure backend endpoint (default: `http://localhost:8765`) and test connection health.
+    - **Local AI Semantic Model Selection**: Switch between pre-configured local ONNX models (e.g., `BAAI/bge-small-en-v1.5`, `sentence-transformers/all-MiniLM-L6-v2`, `BAAI/bge-base-en-v1.5`).
+    - **Database Management**: One-click confirmation to clear all stored database records (`/api/database/clear`).
 
 ---
 
 ## Extracted Data Schema
+
+The sample reponses:
+
+- HRM_Ext/sample_response_fetch_job-requests.json
+- HRM_Ext/sample_response_fetch_candidate_candidates.json
+
+Then the extracted data from all fetches:
 
 ```json
 {
@@ -140,4 +146,6 @@ HRM_Ext/
 - `activeTab`: Allows browser action clicks to communicate with the current active HRM tab.
 - `webNavigation`: Directly detects browser-level SPA History state updates (`onHistoryStateUpdated`).
 - `tabs`: Allows background service worker to monitor tab URLs across SPA navigations.
-- `host_permissions` (`https://hrm.ltsgroup.tech/*`): Authorizes the extension to make authenticated API requests to LTS Group HRM endpoints.
+- `host_permissions`:
+  - `https://hrm.ltsgroup.tech/*`: Authorizes the extension to make authenticated API requests to LTS Group HRM endpoints.
+  - `http://localhost:8765/*` and `http://127.0.0.1:8765/*`: Authorizes direct communication with the local `HRM_Backend` service.
