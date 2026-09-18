@@ -4,10 +4,27 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 cd "$DIR"
 
-PORT="${PORT:-8765}"
-LLM_ENABLED="${LLM_ENABLED:-1}"
-LLM_BASE_URL="${LLM_BASE_URL:-http://localhost:11434}"
-LLM_MODEL="${LLM_MODEL:-qwen2.5:3b}"
+PY="${PYTHON:-python3}"
+if command -v "$PY" >/dev/null 2>&1; then
+    CAN_READ_CONFIG=1
+else
+    CAN_READ_CONFIG=0
+fi
+
+get_cfg() {
+    if [ "${CAN_READ_CONFIG}" = "1" ]; then
+        "$PY" "$DIR/get_config.py" "$1" "$2"
+    else
+        printf '%s' "$2"
+    fi
+}
+
+# Defaults come from HRM_Backend/config.json (config.py / get_config.py);
+# environment variables still take precedence.
+PORT="${PORT:-$(get_cfg server.port 8765)}"
+LLM_ENABLED="${LLM_ENABLED:-$(get_cfg llm.enabled 1)}"
+LLM_BASE_URL="${LLM_BASE_URL:-$(get_cfg llm.base_url http://localhost:11434)}"
+LLM_MODEL="${LLM_MODEL:-$(get_cfg llm.model qwen2.5:3b)}"
 
 if [ ! -d ".venv" ]; then
     echo "Virtual environment not found. Running setup_backend.sh first..."

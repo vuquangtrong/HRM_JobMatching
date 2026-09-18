@@ -4,6 +4,23 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 cd "$DIR"
 
+PY="${PYTHON:-python3}"
+if command -v "$PY" >/dev/null 2>&1; then
+    CAN_READ_CONFIG=1
+else
+    echo "WARNING: '$PY' not found; falling back to inline defaults instead of config.json."
+    CAN_READ_CONFIG=0
+fi
+
+# Reads a dotted config key from config.json (via get_config.py), with an inline fallback.
+get_cfg() {
+    if [ "${CAN_READ_CONFIG}" = "1" ]; then
+        "$PY" "$DIR/get_config.py" "$1" "$2"
+    else
+        printf '%s' "$2"
+    fi
+}
+
 echo "=== Setting up HRM_Backend Python Virtual Environment ==="
 
 if command -v uv &> /dev/null; then
@@ -41,9 +58,13 @@ _confirm() {
 echo ""
 echo "=== Setting up Local LLM (Ollama) for extraction ==="
 
-HRM_SETUP_LLM="${HRM_SETUP_LLM:-1}"
-HRM_LLM_MODEL="${HRM_LLM_MODEL:-qwen2.5:3b}"
-OLLAMA_SERVE_URL="http://localhost:11434"
+# Settings come from HRM_Backend/config.json (see config.py / get_config.py).
+HRM_SETUP_LLM="${HRM_SETUP_LLM:-$(get_cfg llm.enabled 1)}"
+HRM_LLM_MODEL="${HRM_LLM_MODEL:-$(get_cfg llm.model qwen2.5:3b)}"
+OLLAMA_SERVE_URL="$(get_cfg llm.base_url http://localhost:11434)"
+
+# Whether setup_backend.sh pre-downloads the FastEmbed semantic model into cache.
+HRM_SETUP_FASTEMBED="${HRM_SETUP_FASTEMBED:-$(get_cfg fastembed.prewarm 0)}"
 
 if [ "${HRM_SETUP_LLM}" != "1" ]; then
     echo "Skipping LLM setup (HRM_SETUP_LLM != 1). The backend will use deterministic regex taxonomy extraction as baseline."
@@ -90,8 +111,27 @@ else
 fi
 
 echo ""
+echo "=== Pre-warming FastEmbed semantic model cache (optional) ==="
+
+FASTEMBED_MODEL="$(get_cfg fastembed.model BAAI/bge-large-en-v1.5)"
+if [ "${HRM_SETUP_FASTEMBED}" = "1" ]; then
+    if [ -d ".venv" ]; then
+        echo "Downloading FastEmbed model '${FASTEMBED_MODEL}' into cache for offline use..."
+        VENV_PY=".venv/bin/python3"
+        if [ ! -x "${VENV_PY}" ]; then
+            VENV_PY=".venv/bin/python"
+        fi
+        "${VENV_PY}" -c "from extracting_engine import get_semantic_model; get_semantic_model(); print('FastEmbed model ready:', '$FASTEMBED_MODEL')"
+    else
+        echo "No virtual environment yet; skipping FastEmbed pre-warm (re-run after venv creation if needed)."
+    fi
+else
+    echo "Skipping (HRM_SETUP_FASTEMBED != 1). Set 'fastembed.prewarm: true' in config.json to pre-download."
+fi
+
+echo ""
 echo "Setup completed successfully!"
 echo "You can now run: ./run.sh"
 echo ""
 echo "Set LLM_ENABLED=0 to run the backend without the local LLM."
-echo "Set HRM_LLM_MODEL=<tag> or HRM_SETUP_LLM=0 to control LLM setup."
+echo "Edit config.json to change the LLM/FastEmbed models; Set HRM_LLM_MODEL=<tag> or HRM_SETUP_LLM=0 to control LLM setup."

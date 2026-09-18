@@ -25,18 +25,14 @@ Recommended setup for a 4 GB VRAM GPU:
 ollama pull qwen2.5:3b
 ```
 
-- **`qwen2.5:3b`** (**Recommended**, ~2.0 GB in 4-bit `Q4_K_M`) — strong instruction-following and JSON compliance for its size; the **default** in `LLM_MODEL`. Easily fits alongside FastEmbed with headroom on a 4 GB card.
-- **`qwen2.5:1.5b`** (~1.0 GB) — even lighter and faster if you want maximum headroom or lower latency.
-- **`llama3.2:3b`** (~2.0 GB) — reasonable alternative English instruction model.
+The extraction model is configured in `config.json` (`llm.model`), defaulting to **`qwen2.5:3b`** (~2.0 GB in 4-bit `Q4_K_M`) — strong instruction-following and JSON compliance for its size, fits alongside FastEmbed with headroom on a 4 GB card. Other good options: `qwen2.5:1.5b` (~1.0 GB) for more headroom, `llama3.2:3b` (~2.0 GB) for English. `setup_backend.sh` and `run.sh` read the model from `config.json` and pull/warn accordingly.
 
-Point `LLM_MODEL` at the tag you pull. If no LLM is running, the backend seamlessly relies on the deterministic regex baseline.
+### 3. Local AI Embedding Model (Configurable via `config.json`)
 
-### 3. Fixed Local AI Embedding Model
-
-- **Single FastEmbed Model**: Backend is locked to **`BAAI/bge-large-en-v1.5`** (1024-dimensional, ~1.20 GB).
+- **Configurable FastEmbed Model**: The semantic model id, embedding dimension, and cache directory are read from `config.json` (`fastembed.*`), defaulting to **`BAAI/bge-large-en-v1.5`** (1024-dimensional, ~1.20 GB). Nothing is hardcoded in Python or shell scripts.
 - **FastEmbed ONNX Runtime**: Local, in-process inference without requiring GPU or external API dependencies.
-- **Deterministic Fallback**: If FastEmbed cannot load, backend automatically falls back to the internal resilient subword vectorizer.
-- **No Runtime Model Switching**: Model selection endpoints were removed to keep embedding dimensions and latent space consistent.
+- **Deterministic Fallback**: If FastEmbed cannot load, backend automatically falls back to the internal resilient subword vectorizer (sized by `fastembed.dim`).
+- **Keep Embedding Space Consistent**: Changing the FastEmbed model switches the latent space; re-ingest existing records (or clear the DB with `POST /api/database/clear`) after switching.
 
 ### 4. Calibrated Semantic Search Engine (Dump Query Rejection)
 
@@ -56,20 +52,53 @@ Point `LLM_MODEL` at the tag you pull. If no LLM is running, the backend seamles
 
 ### 6. Service Port & Environment Setup
 
-- Runs on default port **`8765`** (configurable via `PORT` environment variable).
+- Runs on the port from `config.json` (`server.port`, default **`8765`**).
 - Compatible with Python virtual environments (`venv` or `uv`).
 
-### LLM Extraction Environment Variables
+### Configuration File (`config.json`)
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `LLM_ENABLED` | `1` | Set `0` to disable LLM extraction (records ingest with empty extracted fields); also skips LLM startup in `run.sh` |
-| `LLM_BASE_URL` | `http://localhost:11434` | Base URL of the local LLM server (Ollama or OpenAI-compatible) |
-| `LLM_MODEL` | `qwen2.5:3b` | Local model tag to use for extraction |
-| `LLM_TIMEOUT` | `120` | Seconds per LLM request |
-| `LLM_CACHE_SIZE` | `8192` | Max cached extractions (keyed by text hash) |
-| `HRM_SETUP_LLM` | `1` | Set `0` to skip Ollama install/model-pull steps in `setup_backend.sh` |
-| `HRM_LLM_MODEL` | `qwen2.5:3b` | Model tag that `setup_backend.sh` ensures is pulled |
+All model settings live in `HRM_Backend/config.json`. `setup_backend.sh` reads it to prepare data (pull the LLM model, optionally pre-download the FastEmbed cache), `run.sh` reads it for the port/LLM defaults, and the backend loads it at runtime. An optional gitignored `config.local.json` is merged on top for machine-specific overrides.
+
+```json
+{
+  "server": { "port": 8765 },
+  "llm": {
+    "enabled": true,
+    "base_url": "http://localhost:11434",
+    "model": "qwen2.5:3b",
+    "timeout_seconds": 30,
+    "cache_size": 4096
+  },
+  "fastembed": {
+    "model": "BAAI/bge-large-en-v1.5",
+    "dim": 1024,
+    "cache_dir": "./fastembed_cache",
+    "prewarm": false
+  },
+  "taxonomy": { "path": "./data/taxonomy.json" }
+}
+```
+
+Precedence (highest wins): environment variables → `config.local.json` → `config.json` → built-in defaults.
+
+### Environment Variables (override `config.json`)
+
+| Variable | Description |
+| --- | --- |
+| `LLM_ENABLED` | Set `0` to disable LLM extraction (records ingest with empty extracted fields); also skips LLM startup in `run.sh` |
+| `LLM_BASE_URL` | Base URL of the local LLM server (Ollama or OpenAI-compatible) |
+| `LLM_MODEL` | Local model tag to use for extraction |
+| `LLM_TIMEOUT` | Seconds per LLM request |
+| `LLM_CACHE_SIZE` | Max cached extractions (keyed by text hash) |
+| `SEMANTIC_MODEL` | FastEmbed model id |
+| `SEMANTIC_MODEL_DIM` | Embedding dimension (fallback vectorizer size; FastEmbed reports real dim) |
+| `FASTEMBED_CACHE_DIR` | Directory where FastEmbed caches downloaded models |
+| `HRM_TAXONOMY_PATH` | Path to the taxonomy JSON file |
+| `PORT` | HTTP port |
+| `HRM_CONFIG_PATH` | Path to an alternative config JSON file |
+| `HRM_SETUP_LLM` | Set `0` to skip Ollama install/model-pull steps in `setup_backend.sh` |
+| `HRM_LLM_MODEL` | Model tag that `setup_backend.sh` ensures is pulled |
+| `HRM_SETUP_FASTEMBED` | Set `1` for `setup_backend.sh` to pre-download the FastEmbed model cache |
 
 ---
 
@@ -87,8 +116,8 @@ flowchart LR
     Ext -->|POST /api/database/clear| API
 
     API --> EE[extracting_engine.py]
-    EE -->|structured JSON| LLM[(Local LLM: qwen2.5:3b / Ollama)]
-    EE -->|dense vectors| FastEmbed[(BAAI/bge-large-en-v1.5 1024-dim)]
+    EE -->|structured JSON| LLM[(Local LLM: config.json llm.model / Ollama)]
+    EE -->|dense vectors| FastEmbed[(FastEmbed: config.json fastembed.model)]
     EE -->|CV PDF text| PDF[pypdf]
     EE --> Matcher[Pre-calculated Matching Engine]
     Matcher --> DB[(SQLite: jobs, candidates, matches)]
@@ -100,7 +129,7 @@ flowchart LR
 
 ### 1. Setup Environment
 
-Run the setup script (automatically detects `uv` or `venv` and installs dependencies). It also offers to install/pull the local LLM (Ollama) for extraction:
+Run the setup script (automatically detects `uv` or `venv` and installs dependencies). It reads `config.json` and offers to install/pull the local LLM (Ollama) for extraction; set `"prewarm": true` under `fastembed` to also pre-download the embedding model:
 
 ```bash
 cd HRM_Backend
@@ -109,7 +138,7 @@ cd HRM_Backend
 
 ### 2. Start the Local LLM (for extraction)
 
-`run.sh` starts `ollama serve` automatically if it isn't already running. To pull the recommended model manually (fits a 4 GB Nvidia GPU in Q4):
+`run.sh` reads `llm.base_url` and `llm.model` from `config.json` and starts `ollama serve` automatically if it isn't already running. To pull the recommended model manually (fits a 4 GB Nvidia GPU in Q4):
 
 ```bash
 ollama pull qwen2.5:3b

@@ -1,6 +1,6 @@
 """
 HRM_Backend - Job Matching Platform REST API
-FastAPI service running on custom port 8765.
+FastAPI service running on the port from config.json (default 8765).
 """
 
 import os
@@ -36,16 +36,14 @@ from extracting_engine import (
     download_and_extract_cv,
     get_semantic_model,
     LocalSemanticModel,
-    SEMANTIC_MODEL_ID,
-    SEMANTIC_MODEL_DIM,
     get_llm_extractor,
-    LLM_MODEL,
     get_taxonomy_manager
 )
 from matching_engine import (
     recalculate_for_job,
     recalculate_for_candidate
 )
+from config import get_config
 
 # Logging configuration
 logging.basicConfig(
@@ -190,7 +188,7 @@ def health_check():
     model = get_semantic_model()
     return {
         "status": "healthy",
-        "port": int(os.environ.get("PORT", 8765)),
+        "port": int(get_config()["server"]["port"]),
         "local_model": "FastEmbed (ONNX)" if model.fastembed_model is not None else "Resilient Subword Vectorizer",
         "stats": stats
     }
@@ -706,23 +704,24 @@ def clear_database():
 
 @app.get("/api/models")
 def get_models():
-    """Returns read-only backend model information."""
+    """Returns read-only backend model information from the active config."""
+    cfg = get_config()
     model = get_semantic_model()
     llm_extractor = get_llm_extractor()
     llm_runtime = llm_extractor.get_runtime_info()
+    fastembed_cfg = cfg["fastembed"]
     return {
         "llm": {
             "enabled": llm_extractor.is_enabled(),
-            "model": LLM_MODEL,
+            "model": cfg["llm"]["model"],
             "runtime": llm_runtime,
         },
         "fastembed": {
             "models": [
                 {
-                    "id": SEMANTIC_MODEL_ID,
-                    "name": "BGE Large EN v1.5",
-                    "dim": SEMANTIC_MODEL_DIM,
-                    "size": "~1.20 GB",
+                    "id": fastembed_cfg["model"],
+                    "name": fastembed_cfg["model"],
+                    "dim": model.dim,
                 }
             ],
             "active_model": model.model_name,
@@ -735,6 +734,6 @@ def get_models():
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8765))
+    port = int(get_config()["server"]["port"])
     logger.info(f"Starting HRM_Backend on http://0.0.0.0:{port}...")
     uvicorn.run("app:app", host="0.0.0.0", port=port, reload=True)

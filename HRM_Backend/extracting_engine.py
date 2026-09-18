@@ -25,14 +25,19 @@ from collections import OrderedDict
 from urllib.parse import urlparse
 from typing import List, Dict, Any, Optional, Tuple
 
+from config import get_config
+
 logger = logging.getLogger("hrm.extracting_engine")
+
+_config = get_config()
 
 # ==========================================
 # Local Dense Embedding Model & Skill Cache
 # ==========================================
 
-SEMANTIC_MODEL_ID = "BAAI/bge-large-en-v1.5"
-SEMANTIC_MODEL_DIM = 1024
+SEMANTIC_MODEL_ID = str(_config["fastembed"]["model"])
+SEMANTIC_MODEL_DIM = int(_config["fastembed"]["dim"])
+FASTEMBED_CACHE_DIR = str(_config["fastembed"]["cache_dir"])
 
 
 class LocalSemanticModel:
@@ -42,14 +47,8 @@ class LocalSemanticModel:
     deterministic crc32 subword vectorizer ensuring 100% offline persistence and consistency.
     """
 
-    def __init__(self, model_name: str = SEMANTIC_MODEL_ID):
-        if model_name != SEMANTIC_MODEL_ID:
-            logger.info(
-                "Ignoring configured semantic model '%s'; using fixed model '%s'.",
-                model_name,
-                SEMANTIC_MODEL_ID,
-            )
-        self.model_name = SEMANTIC_MODEL_ID
+    def __init__(self, model_name: Optional[str] = None):
+        self.model_name = model_name or SEMANTIC_MODEL_ID
         self.dim = SEMANTIC_MODEL_DIM
         self.fastembed_model = None
         self._initialize_model()
@@ -60,9 +59,9 @@ class LocalSemanticModel:
         try:
             from fastembed import TextEmbedding
             logger.info(f"Loading FastEmbed model '{self.model_name}'...")
-            self.fastembed_model = TextEmbedding(model_name=self.model_name, cache_dir="./fastembed_cache")
+            self.fastembed_model = TextEmbedding(model_name=self.model_name, cache_dir=FASTEMBED_CACHE_DIR)
             if hasattr(self.fastembed_model, "embedding_size"):
-                self.dim = self.fastembed_model.embedding_size
+                self.dim = int(self.fastembed_model.embedding_size)
             logger.info(f"FastEmbed local model initialized successfully (dim={self.dim}).")
         except Exception as e:
             logger.warning(f"FastEmbed not loaded ({e}). Using resilient internal deterministic vectorizer (dim={self.dim}).")
@@ -192,10 +191,7 @@ def clear_skill_embedding_cache():
 # Dynamic Taxonomy Manager (Regex in text file)
 # ==========================================
 
-DEFAULT_TAXONOMY_PATH = os.environ.get(
-    "HRM_TAXONOMY_PATH",
-    os.path.join(os.path.dirname(__file__), "data", "taxonomy.json")
-)
+DEFAULT_TAXONOMY_PATH = str(_config["taxonomy"]["path"])
 
 SEED_TAXONOMY = {
     "skills": {
@@ -487,11 +483,11 @@ try:
 except ImportError:  # pragma: no cover
     _REQUESTS_IMPORT_OK = False
 
-LLM_ENABLED = os.environ.get("LLM_ENABLED", "1").lower() not in ("0", "false", "no")
-LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://localhost:11434").rstrip("/")
-LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:3b")
-LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "30"))
-LLM_CACHE_SIZE = int(os.environ.get("LLM_CACHE_SIZE", "4096"))
+LLM_ENABLED = bool(_config["llm"]["enabled"])
+LLM_BASE_URL = str(_config["llm"]["base_url"]).rstrip("/")
+LLM_MODEL = str(_config["llm"]["model"])
+LLM_TIMEOUT = float(_config["llm"]["timeout_seconds"])
+LLM_CACHE_SIZE = int(_config["llm"]["cache_size"])
 
 LEVEL_MAP = {
     "intern": "Intern",
@@ -1091,7 +1087,8 @@ def download_and_extract_cv(cv_url: str, bearer_token: Optional[str] = None) -> 
             return ""
 
         host = (parsed.hostname or "").lower()
-        if host in ("169.254.169.254", "metadata.google.internal") or (host.startswith("127.") and not (parsed.port and parsed.port == 8765)):
+        server_port = int(_config["server"]["port"])
+        if host in ("169.254.169.254", "metadata.google.internal") or (host.startswith("127.") and not (parsed.port and parsed.port == server_port)):
             logger.warning(f"Rejected SSRF host: {host}")
             return ""
 
