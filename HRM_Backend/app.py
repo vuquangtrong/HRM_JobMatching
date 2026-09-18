@@ -203,7 +203,7 @@ def health_check():
 @app.post("/api/jobs")
 def ingest_job(payload: JobPayload, force_recalculate: bool = False):
     """
-    Ingests or updates a Job Request from HRM_Ext.
+    Ingests or updates a Job Request from HRM_Extension.
     Extracts keywords, level, and embeddings.
     Calculates pre-calculated matches with all saved candidates ONLY IF the job is new
     or force_recalculate is explicitly requested.
@@ -551,7 +551,7 @@ def ingest_candidate(payload: CandidatePayload):
 @app.post("/api/candidates/batch")
 def batch_ingest_candidates(payload: BatchCandidatePayload):
     """
-    Batch ingests candidates extracted by HRM_Ext.
+    Batch ingests candidates extracted by HRM_Extension.
     Downloads CVs in parallel and coordinates duplicate concurrent submissions so CVs
     are downloaded strictly once. Ingests candidates and pre-calculates matches.
     """

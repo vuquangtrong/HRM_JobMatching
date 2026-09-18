@@ -2,8 +2,8 @@
 
 ## Sub-projects
 
-- `HRM_Ext`: a Chrome/Edge extention to auto interact with HRM page
-- `HRM_Backend`: a backend for HRM_Ext to process and return data to show on HRM page
+- `HRM_Extension`: a Chrome/Edge extension to auto interact with HRM page
+- `HRM_Backend`: a backend for HRM_Extension to process and return data to show on HRM page
 
 ## Rules
 

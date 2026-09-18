@@ -77,7 +77,7 @@ Point `LLM_MODEL` at the tag you pull. If no LLM is running, the backend seamles
 
 ```mermaid
 flowchart LR
-    Ext[HRM_Ext Extension] -->|POST /api/jobs| API[FastAPI on port 8765]
+    Ext[HRM_Extension Extension] -->|POST /api/jobs| API[FastAPI on port 8765]
     Ext -->|POST /api/candidates/batch| API
     Ext -->|GET /api/jobs?q=...&min_score=...| API
     Ext -->|GET /api/jobs/{id}/candidates| API

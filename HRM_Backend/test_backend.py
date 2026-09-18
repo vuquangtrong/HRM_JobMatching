@@ -200,12 +200,12 @@ class TestHRMBackend(unittest.TestCase):
         self.assertGreater(cand_matches[0]["matching_percentage"], 60.0)
 
     def test_sample_dataset_ingestion(self):
-        """Test with sample JSON files from HRM_Ext directory."""
+        """Test with sample JSON files from HRM_Extension directory."""
         job_sample_path = os.path.join(
-            os.path.dirname(__file__), "..", "HRM_Ext", "sample_response_fetch_job-requests.json"
+            os.path.dirname(__file__), "..", "HRM_Extension", "sample_response_fetch_job-requests.json"
         )
         cand_sample_path = os.path.join(
-            os.path.dirname(__file__), "..", "HRM_Ext", "sample_response_fetch_candidate_candidates.json"
+            os.path.dirname(__file__), "..", "HRM_Extension", "sample_response_fetch_candidate_candidates.json"
         )
 
         if not os.path.exists(job_sample_path) or not os.path.exists(cand_sample_path):
@@ -437,7 +437,7 @@ class TestHRMBackend(unittest.TestCase):
 
     def test_concurrent_duplicate_ingest_processed_once(self):
         """
-        Reproduction of the console.log incident: HRM_Ext submits the same job and the same
+        Reproduction of the console.log incident: HRM_Extension submits the same job and the same
         candidate batch concurrently from two browser contexts. Regression: concurrent
         duplicate submissions must be processed exactly ONCE - the losing submission observes
         the winner's committed record and only updates metadata. CV download, LLM extraction,

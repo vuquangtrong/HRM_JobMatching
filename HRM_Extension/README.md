@@ -80,8 +80,8 @@ This extension acts as the client-side data extractor and interactive recruitmen
 ## Extracted Data Schema
 
 Sample responses:
-- `HRM_Ext/sample_response_fetch_job-requests.json`
-- `HRM_Ext/sample_response_fetch_candidate_candidates.json`
+- `HRM_Extension/sample_response_fetch_job-requests.json`
+- `HRM_Extension/sample_response_fetch_candidate_candidates.json`
 
 Extracted payload structure:
 
@@ -121,10 +121,10 @@ Extracted payload structure:
    - Edge: `edge://extensions`
 3. Enable **Developer mode** toggle in the top-right corner.
 4. Click **Load unpacked**.
-5. Select the `HRM_Ext` directory:
+5. Select the `HRM_Extension` directory:
 
    ```text
-   /path/to/HRM_JobMatching/HRM_Ext
+   /path/to/HRM_JobMatching/HRM_Extension
    ```
 
 6. Navigate to `https://hrm.ltsgroup.tech/recruitment` and log in.
@@ -136,7 +136,7 @@ Extracted payload structure:
 ## Directory Structure
 
 ```text
-HRM_Ext/
+HRM_Extension/
 ├── README.md              # Extension documentation
 ├── manifest.json          # Manifest V3 configuration
 ├── background/
