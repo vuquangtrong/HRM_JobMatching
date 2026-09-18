@@ -29,6 +29,9 @@ from database import (
     save_match_result,
     get_matching_candidates_for_job,
     get_matching_jobs_for_candidate,
+    save_or_update_candidate_application,
+    get_candidate_applications,
+    get_candidate_applications_batch,
     get_db_stats
 )
 from extracting_engine import (
@@ -767,6 +770,158 @@ class TestHRMBackend(unittest.TestCase):
         total_time = t1 - t0
         self.assertLess(total_time, 1.5, f"25 candidate matches took {total_time:.3f}s, expected < 1.5s")
         self.assertGreater(res["matching_percentage"], 50.0)
+
+    def test_candidate_applications_crud(self):
+        """Test candidate applications table CRUD and batch queries."""
+        job_data = {
+            "id": "app-test-job-1",
+            "title": "Backend Python Engineer",
+            "code": "JOB-PY-01",
+            "request": "Python FastAPI",
+            "job_description": "Backend services"
+        }
+        save_or_update_job(job_data, self.db_path)
+
+        cand_data = {
+            "id": "app-test-cand-1",
+            "name": "Le Thi C",
+            "status": "PM_ROUND",
+            "position": "Python Dev",
+            "location": "Ha Noi"
+        }
+        save_or_update_candidate(cand_data, self.db_path)
+
+        # 1. Save application (status takes over candidate's status 'PM_ROUND')
+        app_res = save_or_update_candidate_application(
+            candidate_id="app-test-cand-1",
+            job_id="app-test-job-1",
+            db_path=self.db_path
+        )
+        self.assertEqual(app_res["status"], "PM_ROUND")
+        self.assertEqual(app_res["job_title"], "Backend Python Engineer")
+        self.assertEqual(app_res["job_code"], "JOB-PY-01")
+
+        # 2. Query applications for candidate
+        apps = get_candidate_applications("app-test-cand-1", self.db_path)
+        self.assertEqual(len(apps), 1)
+        self.assertEqual(apps[0]["job_id"], "app-test-job-1")
+        self.assertEqual(apps[0]["status"], "PM_ROUND")
+
+        # 3. Add second job application
+        job_data_2 = {
+            "id": "app-test-job-2",
+            "title": "Data Engineer",
+            "code": "JOB-DE-02",
+            "request": "Python Spark"
+        }
+        save_or_update_job(job_data_2, self.db_path)
+
+        save_or_update_candidate_application(
+            candidate_id="app-test-cand-1",
+            job_id="app-test-job-2",
+            status="INTERVIEW",
+            db_path=self.db_path
+        )
+
+        apps_multi = get_candidate_applications("app-test-cand-1", self.db_path)
+        self.assertEqual(len(apps_multi), 2)
+        applied_job_ids = [a["job_id"] for a in apps_multi]
+        self.assertIn("app-test-job-1", applied_job_ids)
+        self.assertIn("app-test-job-2", applied_job_ids)
+
+        # 4. Batch query
+        batch_res = get_candidate_applications_batch(["app-test-cand-1", "non-existent"], self.db_path)
+        self.assertEqual(len(batch_res["app-test-cand-1"]), 2)
+        self.assertEqual(len(batch_res["non-existent"]), 0)
+
+        # 5. Verify get_candidate_by_id and get_all_candidates attach applied_jobs
+        cand_loaded = get_candidate_by_id("app-test-cand-1", self.db_path)
+        self.assertEqual(len(cand_loaded["applied_jobs"]), 2)
+
+        all_cands = get_all_candidates(self.db_path)
+        matching = [c for c in all_cands if c["id"] == "app-test-cand-1"]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(len(matching[0]["applied_jobs"]), 2)
+
+    def test_apply_candidate_to_job_api(self):
+        """Test POST /api/candidates/{candidate_id}/apply API endpoint."""
+        from fastapi.testclient import TestClient
+        import app as backend_app
+
+        client = TestClient(backend_app.app)
+
+        # Ingest Job 1
+        job1 = {
+            "id": "api-job-1",
+            "title": "Embedded C Developer",
+            "code": "EMB-01",
+            "request": "C, C++, RTOS",
+            "jobDescription": "Firmware programming"
+        }
+        res_j1 = client.post("/api/jobs", json=job1)
+        self.assertEqual(res_j1.status_code, 200)
+
+        # Ingest Job 2
+        job2 = {
+            "id": "api-job-2",
+            "title": "Automotive Test Engineer",
+            "code": "AUTO-02",
+            "request": "Python, Testing, CAN",
+            "jobDescription": "Test engineering"
+        }
+        res_j2 = client.post("/api/jobs", json=job2)
+        self.assertEqual(res_j2.status_code, 200)
+
+        # Ingest Candidate with initial job1 application (status: PM_ROUND)
+        cand_payload = {
+            "jobRequestId": "api-job-1",
+            "candidates": [
+                {
+                    "id": "cand-multi-1",
+                    "name": "Do Van D",
+                    "status": "PM_ROUND",
+                    "position": "Software Engineer",
+                    "location": "Da Nang",
+                    "applied_job": {
+                        "id": "api-job-1",
+                        "title": "Embedded C Developer",
+                        "code": "EMB-01",
+                        "status": "PM_ROUND"
+                    }
+                }
+            ]
+        }
+        res_batch = client.post("/api/candidates/batch", json=cand_payload)
+        self.assertEqual(res_batch.status_code, 200)
+
+        # Check candidate's initial applied jobs
+        c_detail = client.get("/api/candidates").json()
+        target_cand = next(c for c in c_detail if c["id"] == "cand-multi-1")
+        self.assertEqual(len(target_cand["applied_jobs"]), 1)
+        self.assertEqual(target_cand["applied_jobs"][0]["job_id"], "api-job-1")
+        self.assertEqual(target_cand["applied_jobs"][0]["status"], "PM_ROUND")
+
+        # Now Candidate applies to Job 2 via the new API endpoint
+        # The status must be taken over from candidate's current status ('PM_ROUND')
+        apply_res = client.post("/api/candidates/cand-multi-1/apply", json={"job_id": "api-job-2"})
+        self.assertEqual(apply_res.status_code, 200)
+        apply_data = apply_res.json()
+        self.assertTrue(apply_data["success"])
+        self.assertEqual(apply_data["status"], "PM_ROUND")
+        self.assertEqual(len(apply_data["applied_jobs"]), 2)
+
+        # Verify Job 2 candidates list shows is_applied = True and lists applied_jobs
+        j2_cands = client.get("/api/jobs/api-job-2/candidates").json()
+        matched = [c for c in j2_cands["candidates"] if c["id"] == "cand-multi-1"]
+        self.assertEqual(len(matched), 1)
+        self.assertTrue(matched[0]["is_applied"])
+        self.assertEqual(len(matched[0]["applied_jobs"]), 2)
+
+        # Verify Candidate's matching jobs list shows is_applied = True for both applied jobs
+        c_jobs = client.get("/api/candidates/cand-multi-1/jobs").json()
+        for j in c_jobs["jobs"]:
+            if j["id"] in ("api-job-1", "api-job-2"):
+                self.assertTrue(j.get("is_applied"))
 
 
 if __name__ == "__main__":

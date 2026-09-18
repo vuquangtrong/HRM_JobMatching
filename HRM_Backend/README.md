@@ -55,6 +55,13 @@ The extraction model is configured in `config.json` (`llm.model`), defaulting to
 - Runs on the port from `config.json` (`server.port`, default **`8765`**).
 - Compatible with Python virtual environments (`venv` or `uv`).
 
+### 7. Candidate-Job Application Relationships & Multi-Job Support
+
+- **Multi-Job Applications**: Candidates can apply to multiple jobs. Applications are persisted in SQLite in the `candidate_applications` table.
+- **Automatic Status Inheritance**: When candidates are ingested from HRM (which returns `jobRequests` for each candidate), the candidate is automatically linked to the applied job, inheriting the candidate's recruitment status (e.g. `PM_ROUND`, `INTERVIEW`, `OFFER`).
+- **Dynamic Application Endpoint (`POST /api/candidates/{candidate_id}/apply`)**: Allows applying a candidate to a new job on-the-fly from the extension matching views. If no status is specified in the request body, it automatically inherits the candidate's current recruitment status.
+- **Bi-directional Application State**: Matching endpoints (`/api/jobs/{job_id}/candidates` and `/api/candidates/{candidate_id}/jobs`) return `applied_jobs`, `is_applied`, and `application_status` fields, enabling real-time status badges and `Apply` button states.
+
 ### Configuration File (`config.json`)
 
 All model settings live in `HRM_Backend/config.json`. `setup_backend.sh` reads it to prepare data (pull the LLM model, optionally pre-download the FastEmbed cache), `run.sh` reads it for the port/LLM defaults, and the backend loads it at runtime. An optional gitignored `config.local.json` is merged on top for machine-specific overrides.
@@ -108,6 +115,7 @@ Precedence (highest wins): environment variables → `config.local.json` → `co
 flowchart LR
     Ext[HRM_Extension Extension] -->|POST /api/jobs| API[FastAPI on port 8765]
     Ext -->|POST /api/candidates/batch| API
+    Ext -->|POST /api/candidates/{id}/apply| API
     Ext -->|GET /api/jobs?q=...&min_score=...| API
     Ext -->|GET /api/jobs/{id}/candidates| API
     Ext -->|GET /api/candidates?q=...&min_score=...| API
@@ -120,7 +128,7 @@ flowchart LR
     EE -->|dense vectors| FastEmbed[(FastEmbed: config.json fastembed.model)]
     EE -->|CV PDF text| PDF[pypdf]
     EE --> Matcher[Pre-calculated Matching Engine]
-    Matcher --> DB[(SQLite: jobs, candidates, matches)]
+    Matcher --> DB[(SQLite: jobs, candidates, matches, candidate_applications)]
 ```
 
 ---
@@ -172,10 +180,11 @@ Execute both suites (backend + LLM extraction with a simulated LLM server):
 | `POST` | `/api/jobs` | `force_recalculate: bool = False` | Ingest/update job request (recalculates matching ONLY for new jobs) |
 | `GET` | `/api/jobs` | `q: Optional[str]`, `min_score: float = 20.0` | List jobs with match counts; supports calibrated semantic search |
 | `GET` | `/api/jobs/{job_id}` | None | Get specific job request specification and extracted keywords |
-| `GET` | `/api/jobs/{job_id}/candidates` | `limit: int = 100` | Get pre-calculated matching candidates with `matching_percentage`, `matched_skills`, and `matched_experience` |
-| `POST` | `/api/candidates` | `force_recalculate: bool = False` | Ingest single candidate |
-| `POST` | `/api/candidates/batch` | None | Batch ingest candidates with token (recalculates matching ONLY for new candidates; $O(1)$ status update for existing) |
-| `GET` | `/api/candidates` | `q: Optional[str]`, `min_score: float = 20.0` | Search candidates via prompt with `query_relevance` score badge or list all |
-| `GET` | `/api/candidates/{candidate_id}/jobs` | `limit: int = 100` | Get pre-calculated matching jobs for candidate with `matching_percentage` |
+| `GET` | `/api/jobs/{job_id}/candidates` | `limit: int = 100` | Get pre-calculated matching candidates with `matching_percentage`, `matched_skills`, `matched_experience`, `applied_jobs`, and `is_applied` |
+| `POST` | `/api/candidates` | `force_recalculate: bool = False` | Ingest single candidate (records `applied_job` application if provided) |
+| `POST` | `/api/candidates/batch` | None | Batch ingest candidates with token (records application for `jobRequestId` with inherited candidate status; recalculates matching ONLY for new candidates) |
+| `GET` | `/api/candidates` | `q: Optional[str]`, `min_score: float = 20.0` | Search candidates via prompt with `query_relevance` score badge or list all (includes `applied_jobs`) |
+| `GET` | `/api/candidates/{candidate_id}/jobs` | `limit: int = 100` | Get pre-calculated matching jobs for candidate with `matching_percentage`, `is_applied`, and `application_status` |
+| `POST` | `/api/candidates/{candidate_id}/apply` | Body: `{"job_id": "...", "status": "..."}` | Apply candidate to a job; inherits current candidate status if `status` is omitted |
 | `GET` | `/api/models` | None | Read-only backend model info (LLM model + FastEmbed fixed model status) |
-| `POST` | `/api/database/clear` | None | Wipe all jobs, candidates, and matching indices with SQLite `VACUUM` |
+| `POST` | `/api/database/clear` | None | Wipe all jobs, candidates, applications, and matching indices with SQLite `VACUUM` |

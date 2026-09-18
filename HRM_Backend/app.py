@@ -27,6 +27,8 @@ from database import (
     get_all_candidates_with_embeddings,
     get_matching_candidates_for_job,
     get_matching_jobs_for_candidate,
+    save_or_update_candidate_application,
+    get_candidate_applications,
     get_db_stats,
     clear_all_data
 )
@@ -168,7 +170,13 @@ class CandidatePayload(BaseModel):
     cvs: Optional[List[str]] = Field(default_factory=list)
     cvInformation: Optional[str] = None
     experience: Optional[str] = None
+    applied_job: Optional[Dict[str, Any]] = None
     raw_data: Optional[Dict[str, Any]] = None
+
+
+class ApplyJobPayload(BaseModel):
+    job_id: str = Field(..., description="Job Request ID to apply to")
+    status: Optional[str] = Field(None, description="Optional status override for application")
 
 
 class BatchCandidatePayload(BaseModel):
@@ -429,10 +437,50 @@ def get_job_candidates(job_id: str, limit: int = Query(100, ge=1, le=200)):
 # Candidates APIs
 # ------------------------------------------
 
+def _record_candidate_application_if_present(
+    cand_id: str,
+    cand_payload: CandidatePayload,
+    cand_status: str,
+    fallback_job_id: Optional[str] = None
+) -> None:
+    """Helper to record applied job relationship from payload, raw_data, or fallback batch job ID."""
+    job_id = None
+    job_title = None
+    job_code = None
+    app_status = cand_status or "OPEN"
+
+    if cand_payload.applied_job and isinstance(cand_payload.applied_job, dict):
+        job_id = cand_payload.applied_job.get("id")
+        job_title = cand_payload.applied_job.get("title")
+        job_code = cand_payload.applied_job.get("code")
+        if cand_payload.applied_job.get("status"):
+            app_status = cand_payload.applied_job.get("status")
+
+    if not job_id and cand_payload.raw_data and isinstance(cand_payload.raw_data, dict):
+        raw_job = cand_payload.raw_data.get("jobRequests")
+        if isinstance(raw_job, dict) and raw_job.get("id"):
+            job_id = raw_job.get("id")
+            job_title = raw_job.get("title") or raw_job.get("name")
+            job_code = raw_job.get("code")
+
+    if not job_id and fallback_job_id:
+        job_id = fallback_job_id
+
+    if job_id:
+        save_or_update_candidate_application(
+            candidate_id=cand_id,
+            job_id=str(job_id),
+            status=app_status,
+            job_title=job_title,
+            job_code=job_code
+        )
+
+
 def process_single_candidate(
     cand_payload: CandidatePayload,
     token: Optional[str] = None,
-    prefetched_cv_text: Optional[str] = None
+    prefetched_cv_text: Optional[str] = None,
+    job_request_id: Optional[str] = None
 ) -> Tuple[Dict[str, Any], bool]:
     """
     Helper to save candidate.
@@ -442,13 +490,14 @@ def process_single_candidate(
     it exactly once; the losing submission falls back to the cheap metadata update.
     """
     with _get_record_lock(cand_payload.id):
-        return _process_single_candidate_locked(cand_payload, token, prefetched_cv_text)
+        return _process_single_candidate_locked(cand_payload, token, prefetched_cv_text, job_request_id)
 
 
 def _process_single_candidate_locked(
     cand_payload: CandidatePayload,
     token: Optional[str],
-    prefetched_cv_text: Optional[str]
+    prefetched_cv_text: Optional[str],
+    job_request_id: Optional[str] = None
 ) -> Tuple[Dict[str, Any], bool]:
     """Executes the actual candidate ingest while holding the per-record lock."""
     try:
@@ -475,6 +524,8 @@ def _process_single_candidate_locked(
                 "raw_data": cand_payload.raw_data or cand_payload.model_dump()
             }
             saved, _ = save_or_update_candidate(cand_data)
+            _record_candidate_application_if_present(cand_payload.id, cand_payload, cand_data["status"], job_request_id)
+            saved = get_candidate_by_id(cand_payload.id)
             logger.info(f"Existing candidate '{saved.get('name')}' (ID: {cand_payload.id}) status updated to '{cand_data['status']}'. Skipped matching recalculation.")
             return saved, False
         else:
@@ -528,6 +579,8 @@ def _process_single_candidate_locked(
             }
 
             saved, _ = save_or_update_candidate(cand_data)
+            _record_candidate_application_if_present(cand_payload.id, cand_payload, cand_data["status"], job_request_id)
+            saved = get_candidate_by_id(cand_payload.id)
             recalculate_for_candidate(cand_payload.id)
             logger.info(f"New candidate '{saved.get('name')}' (ID: {cand_payload.id}) added. Precalculated matches with all jobs.")
             return saved, True
@@ -544,6 +597,46 @@ def ingest_candidate(payload: CandidatePayload):
         "is_new": is_new,
         "candidate": saved
     }
+
+
+@app.post("/api/candidates/{candidate_id}/apply")
+def apply_candidate_to_job(candidate_id: str, payload: ApplyJobPayload):
+    """
+    Applies a candidate to a selected job.
+    Sets the selected job as an applied job for the candidate.
+    Job status is taken over from the current candidate status in fetched data.
+    """
+    with _get_record_lock(candidate_id):
+        cand = get_candidate_by_id(candidate_id)
+        if not cand:
+            raise HTTPException(status_code=404, detail=f"Candidate '{candidate_id}' not found")
+
+        job = get_job_by_id(payload.job_id)
+        job_title = job.get("title") if job else None
+        job_code = job.get("code") if job else None
+
+        # Take over status from current candidate status from fetch data
+        app_status = payload.status or cand.get("status") or "OPEN"
+
+        app_record = save_or_update_candidate_application(
+            candidate_id=candidate_id,
+            job_id=payload.job_id,
+            status=app_status,
+            job_title=job_title,
+            job_code=job_code
+        )
+
+        logger.info(f"Candidate '{cand.get('name')}' (ID: {candidate_id}) applied to job '{job_title or payload.job_id}' with status '{app_status}'.")
+
+        return {
+            "success": True,
+            "message": f"Candidate '{cand.get('name')}' applied to job successfully.",
+            "candidate_id": candidate_id,
+            "job_id": payload.job_id,
+            "status": app_status,
+            "application": app_record,
+            "applied_jobs": get_candidate_applications(candidate_id)
+        }
 
 
 @app.post("/api/candidates/batch")
@@ -588,7 +681,7 @@ def batch_ingest_candidates(payload: BatchCandidatePayload):
     def _process_item(cand: CandidatePayload) -> Tuple[Optional[Dict[str, Any]], bool]:
         try:
             prefetched = cv_texts_map.get(cand.id)
-            saved, is_new = process_single_candidate(cand, token, prefetched_cv_text=prefetched)
+            saved, is_new = process_single_candidate(cand, token, prefetched_cv_text=prefetched, job_request_id=payload.jobRequestId)
             return saved, is_new
         except Exception as e:
             logger.error(f"Error processing candidate {cand.id}: {e}")

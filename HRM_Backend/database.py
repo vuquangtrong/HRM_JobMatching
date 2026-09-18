@@ -89,6 +89,21 @@ def init_db(db_path: Optional[str] = None) -> None:
                 );
             """)
 
+            # 4. Candidate Job Applications table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS candidate_applications (
+                    candidate_id TEXT NOT NULL,
+                    job_id TEXT NOT NULL,
+                    status TEXT DEFAULT 'OPEN',
+                    job_title TEXT,
+                    job_code TEXT,
+                    applied_at TEXT,
+                    updated_at TEXT,
+                    PRIMARY KEY (candidate_id, job_id),
+                    FOREIGN KEY (candidate_id) REFERENCES candidates(id) ON DELETE CASCADE
+                );
+            """)
+
             # Fast lookup indices
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_matches_job_score
@@ -101,6 +116,14 @@ def init_db(db_path: Optional[str] = None) -> None:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_candidates_status
                 ON candidates (status);
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_candidate_applications_candidate
+                ON candidate_applications (candidate_id);
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_candidate_applications_job
+                ON candidate_applications (job_id);
             """)
     finally:
         conn.close()
@@ -296,13 +319,14 @@ def get_candidate_by_id(cand_id: str, db_path: Optional[str] = None) -> Optional
         res["extracted_experiences"] = json.loads(res["extracted_experiences"] or "{}")
         res["embedding"] = json.loads(res["embedding"] or "[]") if res["embedding"] else None
         res["raw_data"] = json.loads(res["raw_data"] or "{}")
+        res["applied_jobs"] = get_candidate_applications(cand_id, db_path)
         return res
     finally:
         conn.close()
 
 
 def get_all_candidates(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Retrieves all candidates."""
+    """Retrieves all candidates with applied jobs."""
     conn = get_db_connection(db_path)
     try:
         rows = conn.execute("SELECT * FROM candidates ORDER BY updated_at DESC").fetchall()
@@ -315,6 +339,11 @@ def get_all_candidates(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
             res["embedding"] = None  # Don't serialize heavy vector
             res["raw_data"] = None
             cands.append(res)
+
+        cand_ids = [c["id"] for c in cands]
+        apps_map = get_candidate_applications_batch(cand_ids, db_path)
+        for c in cands:
+            c["applied_jobs"] = apps_map.get(c["id"], [])
         return cands
     finally:
         conn.close()
@@ -334,6 +363,128 @@ def get_all_candidates_with_embeddings(db_path: Optional[str] = None) -> List[Di
             res["embedding"] = json.loads(res["embedding"] or "[]") if res.get("embedding") else None
             cands.append(res)
         return cands
+    finally:
+        conn.close()
+
+
+# ==========================================
+# Candidate Applications CRUD
+# ==========================================
+
+def save_or_update_candidate_application(
+    candidate_id: str,
+    job_id: str,
+    status: Optional[str] = None,
+    job_title: Optional[str] = None,
+    job_code: Optional[str] = None,
+    db_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """Inserts or updates a candidate application to a job."""
+    conn = get_db_connection(db_path)
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        with conn:
+            # If status is not provided, look up candidate's status from DB
+            if not status:
+                cand_row = conn.execute("SELECT status FROM candidates WHERE id = ?", (candidate_id,)).fetchone()
+                status = cand_row["status"] if cand_row and cand_row["status"] else "OPEN"
+
+            # If job_title or job_code is not provided, look up job from DB
+            if not job_title or not job_code:
+                job_row = conn.execute("SELECT title, code FROM jobs WHERE id = ?", (job_id,)).fetchone()
+                if job_row:
+                    job_title = job_title or job_row["title"]
+                    job_code = job_code or job_row["code"]
+
+            conn.execute("""
+                INSERT INTO candidate_applications (
+                    candidate_id, job_id, status, job_title, job_code, applied_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(candidate_id, job_id) DO UPDATE SET
+                    status = excluded.status,
+                    job_title = coalesce(nullif(excluded.job_title, ''), candidate_applications.job_title),
+                    job_code = coalesce(nullif(excluded.job_code, ''), candidate_applications.job_code),
+                    updated_at = excluded.updated_at;
+            """, (
+                candidate_id,
+                job_id,
+                status or "OPEN",
+                job_title or "",
+                job_code or "",
+                now,
+                now
+            ))
+        return {
+            "candidate_id": candidate_id,
+            "job_id": job_id,
+            "status": status or "OPEN",
+            "job_title": job_title or "",
+            "job_code": job_code or "",
+            "applied_at": now,
+            "updated_at": now
+        }
+    finally:
+        conn.close()
+
+
+def get_candidate_applications(candidate_id: str, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Retrieves all applied jobs for a candidate."""
+    conn = get_db_connection(db_path)
+    try:
+        rows = conn.execute("""
+            SELECT
+                a.job_id,
+                COALESCE(nullif(j.title, ''), nullif(a.job_title, ''), 'Job #' || a.job_id) AS job_title,
+                COALESCE(nullif(j.code, ''), a.job_code, '') AS job_code,
+                a.status,
+                a.applied_at,
+                a.updated_at
+            FROM candidate_applications a
+            LEFT JOIN jobs j ON a.job_id = j.id
+            WHERE a.candidate_id = ?
+            ORDER BY a.applied_at ASC;
+        """, (candidate_id,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_candidate_applications_batch(candidate_ids: List[str], db_path: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
+    """Retrieves all applied jobs for a list of candidate IDs in a single query."""
+    if not candidate_ids:
+        return {}
+    conn = get_db_connection(db_path)
+    try:
+        placeholders = ",".join("?" for _ in candidate_ids)
+        rows = conn.execute(f"""
+            SELECT
+                a.candidate_id,
+                a.job_id,
+                COALESCE(nullif(j.title, ''), nullif(a.job_title, ''), 'Job #' || a.job_id) AS job_title,
+                COALESCE(nullif(j.code, ''), a.job_code, '') AS job_code,
+                a.status,
+                a.applied_at,
+                a.updated_at
+            FROM candidate_applications a
+            LEFT JOIN jobs j ON a.job_id = j.id
+            WHERE a.candidate_id IN ({placeholders})
+            ORDER BY a.applied_at ASC;
+        """, candidate_ids).fetchall()
+
+        result: Dict[str, List[Dict[str, Any]]] = {cid: [] for cid in candidate_ids}
+        for r in rows:
+            cid = r["candidate_id"]
+            if cid in result:
+                item = dict(r)
+                result[cid].append({
+                    "job_id": item["job_id"],
+                    "job_title": item["job_title"],
+                    "job_code": item["job_code"],
+                    "status": item["status"],
+                    "applied_at": item["applied_at"],
+                    "updated_at": item.get("updated_at")
+                })
+        return result
     finally:
         conn.close()
 
@@ -458,6 +609,14 @@ def get_matching_candidates_for_job(job_id: str, limit: int = 100, db_path: Opti
             item["cv_urls"] = json.loads(item["cv_urls"] or "[]")
             item["matched_skills"] = json.loads(item["matched_skills"] or "[]")
             results.append(item)
+
+        cand_ids = [item["id"] for item in results]
+        apps_map = get_candidate_applications_batch(cand_ids, db_path)
+        for item in results:
+            cand_apps = apps_map.get(item["id"], [])
+            item["applied_jobs"] = cand_apps
+            item["is_applied"] = any(app["job_id"] == job_id for app in cand_apps)
+
         return results
     finally:
         conn.close()
@@ -487,6 +646,14 @@ def get_matching_jobs_for_candidate(candidate_id: str, limit: int = 100, db_path
             item = dict(r)
             item["matched_skills"] = json.loads(item["matched_skills"] or "[]")
             results.append(item)
+
+        cand_apps = get_candidate_applications(candidate_id, db_path)
+        applied_job_ids = {a["job_id"]: a for a in cand_apps}
+        for item in results:
+            item["is_applied"] = item["id"] in applied_job_ids
+            if item["is_applied"]:
+                item["application_status"] = applied_job_ids[item["id"]].get("status", "OPEN")
+
         return results
     finally:
         conn.close()
@@ -509,10 +676,11 @@ def get_db_stats(db_path: Optional[str] = None) -> Dict[str, int]:
 
 
 def clear_all_data(db_path: Optional[str] = None) -> None:
-    """Deletes all records from jobs, candidates, and job_candidate_matches tables."""
+    """Deletes all records from jobs, candidates, job_candidate_matches, and candidate_applications tables."""
     conn = get_db_connection(db_path)
     try:
         with conn:
+            conn.execute("DELETE FROM candidate_applications;")
             conn.execute("DELETE FROM job_candidate_matches;")
             conn.execute("DELETE FROM candidates;")
             conn.execute("DELETE FROM jobs;")

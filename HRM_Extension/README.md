@@ -20,7 +20,7 @@ This extension acts as the client-side data extractor and interactive recruitmen
   https://hrm.ltsgroup.tech/recruitment/job-requests/candidate/<jobRequestsId>
   ```
 
-### 2. Dual API Data Extraction & Candidate Status
+### 2. Dual API Data Extraction & Multi-Job Candidate Applications
 
 - Automatically reads the authentication Bearer token from `localStorage.auth_tconnect`.
 - Concurrently queries both HRM backend endpoints:
@@ -28,8 +28,9 @@ This extension acts as the client-side data extractor and interactive recruitmen
   - **Candidates Endpoint**: `GET https://hrm.ltsgroup.tech/api/candidate/candidates/<jobRequestsId>`
 - Extracts strictly targeted fields:
   - **Job Request**: `id`, `title`, `code`, `request`, `jobDescription`
-  - **Candidates**: `id`, `code`, `name`, `position`, `location`, `status` (e.g. `PM_ROUND`, `OPEN`, `OFFER`, `INTERVIEW`), `cvs` (PDF URLs), `cvInformation`, `experience`
-- **Auto-Sync to Backend**: Automatically transmits extracted job and candidate records to `HRM_Backend` on port `8765` for AI keyword parsing, dense embeddings, and precalculated matching.
+  - **Candidates**: `id`, `code`, `name`, `position`, `location`, `status` (e.g. `PM_ROUND`, `OPEN`, `OFFER`, `INTERVIEW`), `cvs` (PDF URLs), `cvInformation`, `experience`, `jobRequests` (the currently applied job for that candidate)
+- **Multi-Job Application Support**: In HRM, each candidate returned from the candidate endpoint includes `jobRequests` representing their currently applied job; the candidate's `status` applies to this specific job. Candidates can apply to multiple jobs across the recruitment lifecycle.
+- **Auto-Sync to Backend**: Transmits extracted job and candidate records (along with applied job and application status) to `HRM_Backend` on port `8765` for AI keyword parsing, dense embeddings, multi-job relationship persistence, and precalculated matching.
 
 ### 3. Direct CV Action Links Across All Tables
 
@@ -61,17 +62,22 @@ This extension acts as the client-side data extractor and interactive recruitmen
     - **Calibrated Semantic Search**: Natural language search box (e.g. `C++ automotive`, `Python tester`) powered by dense cosine embeddings; unrelated or dump queries return 0 results.
     - Selecting a job displays pre-calculated matching candidates:
       - `Candidate Name` (with inline CV links)
-      - `Status` (color-coded badge)
+      - `Applied Jobs` (shows all jobs the candidate has applied to with individual status badges, replacing standalone status column)
       - `Matched Experience`
-      - `Matching Percentage` (progress bar + percentage)
-  - **Search Candidates (with Match Score Badges)**:
+      - `Matching %` (progress bar + percentage)
+      - `Action` (`Apply` button to link candidate to the selected job with inherited status, or disabled `Applied` badge if already applied)
+  - **Search Candidates (with Match Score Badges & Multi-Job Application)**:
     - Free-text query prompt to search candidates across all saved records.
-    - Displays relevance score badge (`${c.query_relevance}% match`) in purple alongside Candidate Name.
+    - Candidate search table columns:
+      - `Candidate Details` (name, position, location, relevance score badge `${c.query_relevance}% match`, inline CV links)
+      - `Applied Jobs` (all applied jobs with individual status badges)
+      - `Action` (`View Matches` button)
     - Dump/gibberish queries (`dump word`, `asdfghjkl`) return 0 results with helpful suggestions.
     - Selecting a candidate displays pre-calculated matching jobs:
       - `Job Title` & `Code`
       - `Matched Requests`
-      - `Matching Percentage` (progress bar + percentage)
+      - `Matching %` (progress bar + percentage)
+      - `Action` (`Apply` button placed next to `Matching %` to apply candidate directly to matching job, or disabled `Applied` badge)
   - **Settings**:
     - **Backend Service URL**: Configure backend endpoint (default: `http://localhost:8765`) and test connection health.
     - **Backend AI Model Info (Read-only)**:
@@ -110,7 +116,13 @@ Extracted payload structure:
       "status": "PM_ROUND",
       "cvs": [
         "https://hrm.ltsgroup.tech/api/cvs/nguyen-van-cuong-test-embedded/cvs-19268c47-79a4-4e30-9ec1-bbed78b60359-1789356178960.pdf"
-      ]
+      ],
+      "applied_job": {
+        "id": "79d999b0-449c-4de2-8592-77b34c2191aa",
+        "title": "BOSCH - Onsite HCM - Software Developer - Ngôn Ngữ C++",
+        "code": "JR-BOSCH-CPP",
+        "status": "PM_ROUND"
+      }
     }
   ]
 }

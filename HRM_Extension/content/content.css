@@ -1,6 +1,5 @@
 /* HRM Extension Floating Indicator & Drawer Styles (Shadow DOM) */
 #hrm-ext-floating-root {
-  --hrm-fs-2xs: 0.625rem;
   --hrm-fs-xs: 0.6875rem;
   --hrm-fs-sm: 0.75rem;
   --hrm-fs-md: 0.8125rem;
@@ -86,7 +85,7 @@
   right: -4px;
   background: #2563eb;
   color: #ffffff;
-  font-size: var(--hrm-fs-2xs);
+  font-size: var(--hrm-fs-xs);
   font-weight: 700;
   line-height: 1;
   padding: 2px 5px;
@@ -110,7 +109,7 @@
   background: rgba(17, 24, 39, 0.92);
   color: #ffffff;
   padding: 6px 12px;
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
   font-weight: 500;
   border-radius: 6px;
   white-space: nowrap;
@@ -161,9 +160,9 @@
   position: fixed;
   top: 16px;
   left: 16px;
-  right: 16px;
+  right: 32px; /* avoid scrollbars */
   bottom: 16px;
-  width: calc(100vw - 32px);
+  width: calc(100vw - 48px);
   height: calc(100vh - 32px);
   max-width: none;
   max-height: none;
@@ -184,7 +183,7 @@
 }
 
 .hrm-ext-title {
-  font-size: var(--hrm-fs-md);
+  font-size: var(--hrm-fs-lg);
   font-weight: 700;
   color: #1e293b;
   display: flex;
@@ -202,7 +201,7 @@
 .hrm-ext-header-btn {
   background: #ffffff;
   border: 1px solid #cbd5e1;
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
   color: #475569;
   cursor: pointer;
   line-height: 1;
@@ -222,7 +221,7 @@
 }
 
 .hrm-ext-expand-btn {
-  font-size: var(--hrm-fs-md);
+  font-size: var(--hrm-fs-lg);
   font-weight: bold;
 }
 
@@ -236,7 +235,7 @@
   padding: 14px 16px;
   overflow-y: auto;
   overflow-x: auto;
-  font-size: var(--hrm-fs-md);
+  font-size: var(--hrm-fs-lg);
   color: #334155;
   flex: 1;
   display: flex;
@@ -249,7 +248,7 @@
 }
 
 .hrm-ext-field-label {
-  font-size: var(--hrm-fs-xs);
+  font-size: var(--hrm-fs-sm);
   font-weight: 600;
   text-transform: uppercase;
   color: #64748b;
@@ -257,7 +256,7 @@
 }
 
 .hrm-ext-field-value {
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
   color: #0f172a;
   word-break: break-word;
 }
@@ -483,7 +482,7 @@
   width: 100%;
   border-collapse: collapse;
   text-align: left;
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
 }
 
 .hrm-ext-table th {
@@ -534,7 +533,7 @@
 .hrm-ext-cv-link {
   display: inline-block;
   margin-left: 6px;
-  font-size: var(--hrm-fs-xs);
+  font-size: var(--hrm-fs-sm);
   font-weight: 600;
   color: #2563eb;
   text-decoration: none;
@@ -554,7 +553,7 @@
 
 .hrm-ext-tab-btn {
   padding: 5px 12px;
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
   font-weight: 600;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -589,7 +588,7 @@
 .hrm-ext-nav-btn {
   flex: 1;
   padding: 7px 10px;
-  font-size: var(--hrm-fs-xs);
+  font-size: var(--hrm-fs-sm);
   font-weight: 600;
   text-align: center;
   border: none;
@@ -624,7 +623,7 @@
 .hrm-ext-badge {
   display: inline-block;
   padding: 2px 8px;
-  font-size: var(--hrm-fs-xs);
+  font-size: var(--hrm-fs-sm);
   font-weight: 700;
   line-height: 1.3;
   border-radius: 9999px;
@@ -677,7 +676,7 @@
 }
 
 .hrm-ext-match-text {
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
   font-weight: 700;
   text-align: right;
   line-height: 1;
@@ -738,7 +737,7 @@
 
 .hrm-ext-input {
   padding: 8px 12px;
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
   border: 1px solid #cbd5e1;
   border-radius: 6px;
   background: #ffffff;
@@ -757,7 +756,7 @@
 .hrm-ext-btn-primary {
   padding: 0 14px;
   height: 34px;
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
   font-weight: 600;
   background: #2563eb;
   color: #ffffff;
@@ -778,7 +777,7 @@
 .hrm-ext-sm-btn {
   padding: 0 12px;
   height: 30px;
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
   font-weight: 600;
   background: #ffffff;
   color: #2563eb;
@@ -801,10 +800,44 @@
   height: 34px;
 }
 
+.hrm-ext-sm-btn.hrm-ext-btn-applied {
+  background: #f1f5f9;
+  color: #94a3b8;
+  border-color: #cbd5e1;
+  cursor: default;
+}
+
+.hrm-ext-sm-btn.hrm-ext-btn-applied:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.hrm-ext-applied-jobs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hrm-ext-applied-job-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: space-between;
+}
+
+.hrm-ext-applied-job-title {
+  font-size: var(--hrm-fs-sm);
+  font-weight: 500;
+  color: #1e293b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .hrm-ext-skill-tag {
   display: inline-block;
   padding: 1px 6px;
-  font-size: var(--hrm-fs-2xs);
+  font-size: var(--hrm-fs-xs);
   font-weight: 500;
   background: #f1f5f9;
   color: #334155;
@@ -819,7 +852,7 @@
 }
 
 #hrm-ext-header-sync-status .hrm-ext-badge {
-  font-size: var(--hrm-fs-2xs);
+  font-size: var(--hrm-fs-xs);
   padding: 3px 8px;
   cursor: default;
 }
@@ -852,13 +885,13 @@
 
 
 .hrm-ext-card-title {
-  font-size: var(--hrm-fs-md);
+  font-size: var(--hrm-fs-lg);
   font-weight: 700;
   color: #1e293b;
 }
 
 .hrm-ext-card-desc {
-  font-size: var(--hrm-fs-xs);
+  font-size: var(--hrm-fs-sm);
   color: #64748b;
   line-height: 1.4;
 }
@@ -871,7 +904,7 @@
 /* Select Dropdown */
 .hrm-ext-select {
   padding: 7px 10px;
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
   border: 1px solid #cbd5e1;
   border-radius: 6px;
   background: #ffffff;
@@ -889,7 +922,7 @@
 /* Danger Button */
 .hrm-ext-btn-danger {
   padding: 7px 14px;
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
   font-weight: 600;
   background: #ef4444;
   color: #ffffff;
@@ -960,7 +993,7 @@
 }
 
 .hrm-ext-modal-title {
-  font-size: var(--hrm-fs-md);
+  font-size: var(--hrm-fs-lg);
   font-weight: 700;
   color: #b91c1c;
   display: flex;
@@ -969,7 +1002,7 @@
 }
 
 .hrm-ext-modal-body {
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
   color: #334155;
   line-height: 1.5;
   display: flex;
@@ -985,7 +1018,7 @@
 }
 
 .hrm-ext-title-md {
-  font-size: var(--hrm-fs-md);
+  font-size: var(--hrm-fs-lg);
   font-weight: 700;
   color: #1e293b;
 }
@@ -997,48 +1030,48 @@
 }
 
 .hrm-ext-count-label {
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
   color: #64748b;
 }
 
 .hrm-ext-section-label {
-  font-size: var(--hrm-fs-xs);
+  font-size: var(--hrm-fs-sm);
   font-weight: 600;
   color: #64748b;
 }
 
 .hrm-ext-meta-line {
   margin-top: 2px;
-  font-size: var(--hrm-fs-xs);
+  font-size: var(--hrm-fs-sm);
   color: #64748b;
 }
 
 .hrm-ext-subtext {
   margin-top: 4px;
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
   color: #475569;
 }
 
 .hrm-ext-body-note {
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
   color: #334155;
 }
 
 .hrm-ext-help-text {
   margin-top: 6px;
-  font-size: var(--hrm-fs-xs);
+  font-size: var(--hrm-fs-sm);
   color: #64748b;
 }
 
 .hrm-ext-code-hint {
   margin-top: 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: var(--hrm-fs-xs);
+  font-size: var(--hrm-fs-sm);
   color: #2563eb;
 }
 
 .hrm-ext-badge-xs {
-  font-size: var(--hrm-fs-2xs);
+  font-size: var(--hrm-fs-xs);
 }
 
 .hrm-ext-model-id {
@@ -1051,7 +1084,7 @@
   gap: 8px;
   align-items: center;
   margin-top: 4px;
-  font-size: var(--hrm-fs-xs);
+  font-size: var(--hrm-fs-sm);
   color: #475569;
   flex-wrap: wrap;
 }
@@ -1070,18 +1103,18 @@
 }
 
 .hrm-ext-health-meta {
-  font-size: var(--hrm-fs-xs);
+  font-size: var(--hrm-fs-sm);
   color: #64748b;
 }
 
 .hrm-ext-modal-warning-copy {
   color: #334155;
-  font-size: var(--hrm-fs-sm);
+  font-size: var(--hrm-fs-md);
   line-height: 1.5;
 }
 
 .hrm-ext-modal-warning-note {
-  font-size: var(--hrm-fs-xs);
+  font-size: var(--hrm-fs-sm);
   color: #b45309;
 }
 

@@ -279,6 +279,28 @@
   }
 
   /**
+   * Helper to format all applied jobs with their job status
+   */
+  function renderAppliedJobs(appliedJobs) {
+    if (!Array.isArray(appliedJobs) || appliedJobs.length === 0) {
+      return '<span class="hrm-ext-subtext">—</span>';
+    }
+    return `
+      <div class="hrm-ext-applied-jobs-list">
+        ${appliedJobs.map((j) => {
+          const title = j.job_title || j.title || 'Untitled Job';
+          return `
+            <div class="hrm-ext-applied-job-item">
+              <span class="hrm-ext-applied-job-title" title="${escapeHtml(title)}">${escapeHtml(title)}</span>
+              ${renderStatusBadge(j.status)}
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  /**
    * Helper to format matching percentage with color-coded progress bar
    */
   function renderMatchPercent(pct) {
@@ -417,11 +439,16 @@
       // Selected Job Matching Candidates Table view
       let rowsHtml = '';
       if (isLoadingJobCandidates) {
-        rowsHtml = '<tr><td colspan="5" class="hrm-ext-cell-message hrm-ext-state-loading">Loading matching candidates from backend...</td></tr>';
+        rowsHtml = '<tr><td colspan="6" class="hrm-ext-cell-message hrm-ext-state-loading">Loading matching candidates from backend...</td></tr>';
       } else if (selectedJobCandidates.length === 0) {
-        rowsHtml = '<tr><td colspan="5" class="hrm-ext-cell-message">No candidates matched with this job yet.</td></tr>';
+        rowsHtml = '<tr><td colspan="6" class="hrm-ext-cell-message">No candidates matched with this job yet.</td></tr>';
       } else {
         selectedJobCandidates.forEach((c, idx) => {
+          const isApplied = Boolean(c.is_applied || (Array.isArray(c.applied_jobs) && c.applied_jobs.some(j => j.job_id === selectedJob.id)));
+          const actionBtn = isApplied
+            ? `<button class="hrm-ext-sm-btn hrm-ext-btn-applied" disabled type="button">Applied</button>`
+            : `<button class="hrm-ext-sm-btn hrm-ext-btn-primary apply-candidate-btn" data-cand-id="${escapeHtml(c.id)}" data-job-id="${escapeHtml(selectedJob.id)}" type="button">Apply</button>`;
+
           rowsHtml += `
             <tr>
               <td class="hrm-ext-cell-index">${idx + 1}</td>
@@ -432,9 +459,10 @@
                 </div>
                 <div class="hrm-ext-meta-line">${escapeHtml(c.code || '')} • ${escapeHtml(c.position || '')} • ${escapeHtml(c.location || '')}</div>
               </td>
-              <td>${renderStatusBadge(c.status)}</td>
+              <td>${renderAppliedJobs(c.applied_jobs)}</td>
               <td class="hrm-ext-body-note hrm-ext-note-clamp">${escapeHtml(c.matched_experience || 'Experience aligns with job.')}</td>
               <td class="hrm-ext-col-match">${renderMatchPercent(c.matching_percentage)}</td>
+              <td class="hrm-ext-col-action">${actionBtn}</td>
             </tr>
           `;
         });
@@ -457,9 +485,10 @@
                 <tr>
                   <th class="hrm-ext-col-index">#</th>
                   <th>Candidate Name</th>
-                  <th>Status</th>
+                  <th>Applied Jobs</th>
                   <th>Matched Experience</th>
                   <th>Matching %</th>
+                  <th class="hrm-ext-table-head-center">Action</th>
                 </tr>
               </thead>
               <tbody>${rowsHtml}</tbody>
@@ -545,11 +574,16 @@
       // Selected Candidate Matching Jobs Table view
       let rowsHtml = '';
       if (isLoadingCandidateJobs) {
-        rowsHtml = '<tr><td colspan="4" class="hrm-ext-cell-message hrm-ext-state-loading">Loading matching jobs from backend...</td></tr>';
+        rowsHtml = '<tr><td colspan="5" class="hrm-ext-cell-message hrm-ext-state-loading">Loading matching jobs from backend...</td></tr>';
       } else if (selectedCandidateJobs.length === 0) {
-        rowsHtml = '<tr><td colspan="4" class="hrm-ext-cell-message">No matching jobs found for this candidate.</td></tr>';
+        rowsHtml = '<tr><td colspan="5" class="hrm-ext-cell-message">No matching jobs found for this candidate.</td></tr>';
       } else {
         selectedCandidateJobs.forEach((j, idx) => {
+          const isApplied = Boolean(j.is_applied || (Array.isArray(selectedCandidate.applied_jobs) && selectedCandidate.applied_jobs.some(app => app.job_id === j.id)));
+          const actionBtn = isApplied
+            ? `<button class="hrm-ext-sm-btn hrm-ext-btn-applied" disabled type="button">Applied</button>`
+            : `<button class="hrm-ext-sm-btn hrm-ext-btn-primary apply-candidate-btn" data-cand-id="${escapeHtml(selectedCandidate.id)}" data-job-id="${escapeHtml(j.id)}" type="button">Apply</button>`;
+
           rowsHtml += `
             <tr>
               <td class="hrm-ext-cell-index">${idx + 1}</td>
@@ -559,6 +593,7 @@
               </td>
               <td class="hrm-ext-body-note hrm-ext-note-clamp">${escapeHtml(j.matched_requests || 'Fulfills job requirements')}</td>
               <td class="hrm-ext-col-match">${renderMatchPercent(j.matching_percentage)}</td>
+              <td class="hrm-ext-col-action">${actionBtn}</td>
             </tr>
           `;
         });
@@ -590,6 +625,7 @@
                   <th>Job Title</th>
                   <th>Matched Requests</th>
                   <th>Matching %</th>
+                  <th class="hrm-ext-table-head-center">Action</th>
                 </tr>
               </thead>
               <tbody>${rowsHtml}</tbody>
@@ -626,7 +662,7 @@
               <div class="hrm-ext-meta-line">${escapeHtml(c.code || '')} • ${escapeHtml(c.position || '')} • ${escapeHtml(c.location || '')}</div>
               <div class="hrm-ext-mt-4">${skillsList}</div>
             </td>
-            <td>${renderStatusBadge(c.status)}</td>
+            <td>${renderAppliedJobs(c.applied_jobs)}</td>
             <td class="hrm-ext-col-action">
               <button class="hrm-ext-sm-btn select-cand-btn" data-cand-id="${escapeHtml(c.id)}" type="button">Find Jobs</button>
             </td>
@@ -641,7 +677,7 @@
               <tr>
                 <th class="hrm-ext-col-index">#</th>
                 <th>Candidate Details</th>
-                <th>Status</th>
+                <th>Applied Jobs</th>
                 <th class="hrm-ext-table-head-center">Action</th>
               </tr>
             </thead>
@@ -888,6 +924,62 @@
         updateDrawerContent();
       });
     }
+
+    const applyCandidateBtns = container.querySelectorAll('.apply-candidate-btn');
+    applyCandidateBtns.forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const candId = btn.dataset.candId;
+        const jobId = btn.dataset.jobId;
+        if (!candId || !jobId) return;
+
+        btn.disabled = true;
+        btn.textContent = 'Applying...';
+
+        try {
+          const res = await fetch(`${getBackendUrl()}/api/candidates/${encodeURIComponent(candId)}/apply`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_id: jobId })
+          });
+
+          if (!res.ok) {
+            throw new Error(`Failed to apply (HTTP ${res.status})`);
+          }
+
+          const data = await res.json();
+
+          // 1. Update matching candidate in local selectedJobCandidates (if on selected job view)
+          const cand = selectedJobCandidates.find(c => c.id === candId);
+          if (cand) {
+            cand.is_applied = true;
+            cand.applied_jobs = data.applied_jobs || [];
+          }
+
+          // 2. Update matching job in local selectedCandidateJobs (if on selected candidate view)
+          const candJob = selectedCandidateJobs.find(j => j.id === jobId);
+          if (candJob) {
+            candJob.is_applied = true;
+          }
+          if (selectedCandidate && selectedCandidate.id === candId) {
+            selectedCandidate.applied_jobs = data.applied_jobs || [];
+          }
+
+          // 3. Also update candidate in search results if present
+          const searchCand = candidateSearchResults.find(c => c.id === candId);
+          if (searchCand) {
+            searchCand.applied_jobs = data.applied_jobs || [];
+          }
+
+          updateDrawerContent();
+        } catch (err) {
+          console.error('[HRM Extension] Apply error:', err);
+          alert(`Error applying candidate to job: ${err.message}`);
+          btn.disabled = false;
+          btn.textContent = 'Apply';
+        }
+      });
+    });
 
     // 3. Candidate Search events
     const candSearchInput = container.querySelector('#hrm-ext-candidate-search-input');
@@ -1318,6 +1410,19 @@
                 cvFiles = [item.cv.cvs];
               }
             }
+            const itemJobReq = item?.jobRequests;
+            const appliedJob = itemJobReq ? {
+              id: itemJobReq.id,
+              title: itemJobReq.title || itemJobReq.name || null,
+              code: itemJobReq.code || null,
+              status: item?.status || item?.cv?.status || 'OPEN'
+            } : (jobRequestId ? {
+              id: jobRequestId,
+              title: jobReqRaw?.title || jobReqRaw?.name || null,
+              code: jobReqRaw?.code || null,
+              status: item?.status || item?.cv?.status || 'OPEN'
+            } : null);
+
             return {
               id: item?.cv?.id || item?.id || null,
               application_id: item?.id || null,
@@ -1330,6 +1435,7 @@
               cvs: Array.isArray(cvFiles) ? cvFiles : [cvFiles],
               cvInformation: item?.cv?.cvInformation || null,
               experience: item?.cv?.experience || null,
+              applied_job: appliedJob,
               raw_data: item
             };
           })
