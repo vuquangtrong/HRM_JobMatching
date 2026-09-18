@@ -8,10 +8,9 @@
  * - Auto-syncs to HRM_Backend on port 8765
  * - Header Actions: Backend Sync Status badge, Resync button, Full Page, Close
  * - Multi-page Drawer:
- *   1. Active Page (Current job request, candidate table with status badges, spec, json)
- *   2. All Jobs (Semantic search to filter jobs, lists saved jobs, clicking job displays matching candidates)
- *   3. Candidate Search (Query prompt to search candidates, clicking candidate displays matching jobs)
- *   4. Backend Settings (URL config, backend AI model info, clear all database option)
+ *   1. All Jobs (Semantic search to filter jobs, lists saved jobs, clicking job displays matching candidates)
+ *   2. Candidate Search (Query prompt to search candidates, clicking candidate displays matching jobs)
+ *   3. Backend Settings (URL config, backend AI model info, clear all database option)
  */
 
 (() => {
@@ -101,8 +100,7 @@
   let isFetching = false;
 
   // Drawer Navigation State
-  let mainPage = 'active'; // 'active' | 'jobs' | 'search' | 'settings'
-  let activeTabName = 'candidates'; // 'candidates' | 'jobDetails' for active page
+  let mainPage = 'jobs'; // 'jobs' | 'search' | 'settings'
 
   // Backend Sync & Cache State
   let backendSyncStatus = { synced: false, time: null, error: null, count: 0, newCount: 0, updatedCount: 0 };
@@ -413,117 +411,7 @@
    * Main Drawer View Renderers
    */
 
-  // 1. Active Page Content
-  function renderActivePageView() {
-    const candsCount = extractedData?.candidates?.length || 0;
-    const reqTitle = extractedData?.jobRequest?.title || '';
-
-    let html = '';
-
-    if (reqTitle) {
-      html += `
-        <div class="hrm-ext-panel-soft hrm-ext-panel-soft-compact hrm-ext-mb-md">
-          <div class="hrm-ext-field-label">Job Title</div>
-          <div class="hrm-ext-field-value hrm-ext-title-md">${escapeHtml(reqTitle)}</div>
-        </div>
-      `;
-    }
-
-    if (extractedData) {
-      html += `
-        <div class="hrm-ext-tabs">
-          <button class="hrm-ext-tab-btn ${activeTabName === 'candidates' ? 'active' : ''}" type="button" data-tab="candidates">Candidates Table (${candsCount})</button>
-          <button class="hrm-ext-tab-btn ${activeTabName === 'jobDetails' ? 'active' : ''}" type="button" data-tab="jobDetails">Job Request Details</button>
-        </div>
-      `;
-
-      if (activeTabName === 'candidates') {
-        const cands = extractedData.candidates || [];
-        if (cands.length > 0) {
-          let rowsHtml = '';
-          cands.forEach((cand, idx) => {
-            const cvButtonsHtml = renderCvActionLinks(cand.cvs);
-
-            rowsHtml += `
-              <tr>
-                <td class="hrm-ext-cell-index">${idx + 1}</td>
-                <td class="cand-name-col">
-                  <div class="hrm-ext-inline-wrap">
-                    <span class="hrm-ext-text-strong">${escapeHtml(cand.name || 'N/A')}</span>
-                    ${cvButtonsHtml}
-                  </div>
-                </td>
-                <td>${renderStatusBadge(cand.status)}</td>
-                <td class="cand-code-col">${escapeHtml(cand.code || 'N/A')}</td>
-                <td class="cand-text-col">${escapeHtml(cand.position || 'N/A')}</td>
-                <td class="cand-text-col">${escapeHtml(cand.location || 'N/A')}</td>
-              </tr>
-            `;
-          });
-
-          html += `
-            <div class="hrm-ext-table-container">
-              <table class="hrm-ext-table">
-                <thead>
-                  <tr>
-                    <th class="hrm-ext-col-index">#</th>
-                    <th>Candidate Name</th>
-                    <th>Status</th>
-                    <th>Code</th>
-                    <th>Position</th>
-                    <th>Location</th>
-                  </tr>
-                </thead>
-                <tbody>${rowsHtml}</tbody>
-              </table>
-            </div>
-          `;
-        } else {
-          html += '<div class="hrm-ext-empty-state hrm-ext-empty-state-sm">No candidates attached to this job request yet.</div>';
-        }
-      } else if (activeTabName === 'jobDetails') {
-        const req = extractedData.jobRequest || {};
-        html += `
-          <div class="hrm-ext-card hrm-ext-stack-md">
-            <div class="hrm-ext-field">
-              <div class="hrm-ext-title">Request Summary</div>
-              <div class="hrm-ext-preline">${escapeHtml(req.request || 'N/A')}</div>
-            </div>
-            ${req.jobDescription ? `
-            <div class="hrm-ext-field">
-              <div class="hrm-ext-title">Job Description</div>
-              <div class="hrm-ext-preline">${req.jobDescription}</div>
-            </div>` : ''}
-          </div>
-        `;
-      }
-    } else if (isFetching) {
-      html += `
-        <div class="hrm-ext-empty-state hrm-ext-empty-state-lg hrm-ext-state-loading">
-          <div><strong>Fetching Job Request & Candidates...</strong></div>
-          <div class="hrm-ext-help-text">Querying HRM APIs concurrently</div>
-        </div>
-      `;
-    } else if (currentJobRequestId) {
-      html += `
-        <div class="hrm-ext-empty-state hrm-ext-empty-state-lg">
-          <div>Job Request #${currentJobRequestId} detected.</div>
-          <div class="hrm-ext-count-label hrm-ext-mt-6">Click <strong>Resync</strong> in the header to extract data.</div>
-        </div>
-      `;
-    } else {
-      html += `
-        <div class="hrm-ext-empty-state hrm-ext-empty-state-lg">
-          Navigate to a Job Request candidate page:
-          <div class="hrm-ext-code-hint">/recruitment/job-requests/candidate/&lt;jobRequestsId&gt;</div>
-        </div>
-      `;
-    }
-
-    return html;
-  }
-
-  // 2. All Jobs View (with Semantic Search)
+  // 1. All Jobs View (with Semantic Search)
   function renderAllJobsView() {
     if (selectedJob) {
       // Selected Job Matching Candidates Table view
@@ -651,7 +539,7 @@
 
   }
 
-  // 3. Candidate Search View
+  // 2. Candidate Search View
   function renderCandidateSearchView() {
     if (selectedCandidate) {
       // Selected Candidate Matching Jobs Table view
@@ -790,7 +678,7 @@
     `;
   }
 
-  // 4. Backend Settings View
+  // 3. Backend Settings View
   function renderSettingsView() {
     const llm = backendModelInfo?.llm || {};
     const llmRuntime = llm.runtime || {};
@@ -911,7 +799,6 @@
       bodyEl.innerHTML = `
         <!-- Main Navigation Bar -->
         <div class="hrm-ext-main-nav">
-          <button class="hrm-ext-nav-btn ${mainPage === 'active' ? 'active' : ''}" type="button" data-nav="active">Active Page</button>
           <button class="hrm-ext-nav-btn ${mainPage === 'jobs' ? 'active' : ''}" type="button" data-nav="jobs">All Jobs</button>
           <button class="hrm-ext-nav-btn ${mainPage === 'search' ? 'active' : ''}" type="button" data-nav="search">Search Candidates</button>
           <button class="hrm-ext-nav-btn ${mainPage === 'settings' ? 'active' : ''}" type="button" data-nav="settings">Settings</button>
@@ -948,17 +835,7 @@
       });
     });
 
-    // 2. Sub-tabs in active page
-    const tabBtns = container.querySelectorAll('.hrm-ext-tab-btn');
-    tabBtns.forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        activeTabName = btn.dataset.tab || activeTabName;
-        updateDrawerContent();
-      });
-    });
-
-    // 3. Jobs view events
+    // 2. Jobs view events
     const refreshJobsBtn = container.querySelector('#hrm-ext-refresh-jobs-btn');
     if (refreshJobsBtn) {
       refreshJobsBtn.addEventListener('click', (e) => {
@@ -1012,7 +889,7 @@
       });
     }
 
-    // 4. Candidate Search events
+    // 3. Candidate Search events
     const candSearchInput = container.querySelector('#hrm-ext-candidate-search-input');
     const candSearchBtn = container.querySelector('#hrm-ext-candidate-search-btn');
     if (candSearchBtn && candSearchInput) {
@@ -1067,7 +944,7 @@
       });
     }
 
-    // 5. Settings events
+    // 4. Settings events
     const saveUrlBtn = container.querySelector('#hrm-ext-save-url-btn');
     const urlInput = container.querySelector('#hrm-ext-backend-url-input');
     if (saveUrlBtn && urlInput) {

@@ -9,16 +9,19 @@ This extension acts as the client-side data extractor and interactive recruitmen
 ## Features
 
 ### 1. Robust Triple-Layer SPA Navigation (State Stuck Fix)
+
 - Prevents UI state freeze across client-side Single Page Application (SPA) transitions via a 3-layer architecture:
   1. **Background Service Worker (`service-worker.js`)**: Listens to browser-level events via `chrome.webNavigation.onHistoryStateUpdated` and `chrome.tabs.onUpdated`.
   2. **Main-World Bridge (`bridge.js`)**: Intercepts `window.history.pushState` and `window.history.replaceState` in the page context, dispatching custom `hrm-spa-navigate` events.
   3. **Content Script Observer (`content.js`)**: Employs URL change polling and DOM mutation observation to guarantee state recovery during rapid route switching or back/forward navigation.
 - Automatically triggers extraction when navigating to a Job Request candidate route:
+
   ```text
   https://hrm.ltsgroup.tech/recruitment/job-requests/candidate/<jobRequestsId>
   ```
 
 ### 2. Dual API Data Extraction & Candidate Status
+
 - Automatically reads the authentication Bearer token from `localStorage.auth_tconnect`.
 - Concurrently queries both HRM backend endpoints:
   - **Job Request Endpoint**: `GET https://hrm.ltsgroup.tech/api/job-requests/<jobRequestsId>`
@@ -29,13 +32,14 @@ This extension acts as the client-side data extractor and interactive recruitmen
 - **Auto-Sync to Backend**: Automatically transmits extracted job and candidate records to `HRM_Backend` on port `8765` for AI keyword parsing, dense embeddings, and precalculated matching.
 
 ### 3. Direct CV Action Links Across All Tables
+
 - Clickable PDF action links (e.g. `[CV 1]`, `[CV 2]`) are rendered inline directly next to the candidate's name across **all** views:
-  - **Active Page Candidates Table**
   - **Job Details Matching Candidates Table**
   - **Candidate Search Results Table**
 - Clicking opens the candidate's CV directly in a new browser tab with HRM session authentication headers.
 
 ### 4. Shadow DOM Encapsulated In-Page Widget
+
 - Injects a floating widget encapsulated in an Open Shadow Root (`attachShadow({ mode: 'open' })`) to prevent host page CSS pollution.
 - Visual status indicators conform strictly to design rules (color-coded status dots without generated icons):
   - ⚪ **Gray (Idle)**: Injected and idle on non-candidate pages.
@@ -45,13 +49,13 @@ This extension acts as the client-side data extractor and interactive recruitmen
   - 🔴 **Red (Error)**: Network error or authentication missing.
 
 ### 5. Multi-Page In-Page Drawer & Workspace
+
 - **Header Actions**:
   - **Live Backend Sync Badge**: Shows real-time synchronization state with backend (`Synced (X new, Y upd)`, `Sync Error`, or `Backend Ready`).
   - **Resync Button**: Manually triggers synchronization of the current job request and candidates to backend.
   - **Expand Button (`⤢` / `🗗`)**: Toggles normal widget drawer and full-screen workspace view.
   - **Close Button (`×`)**: Closes drawer view.
 - **Main Navigation Bar**:
-  - **Active Page**: Current HRM job request details, candidate table with colored status badges (`PM_ROUND` = purple, `OPEN` = green, `OFFER` = emerald, etc.), spec viewer, and inline CV links.
   - **All Jobs (Matching & Semantic Search)**:
     - Lists all saved jobs from `HRM_Backend` with immediate auto-refresh upon ingestion.
     - **Calibrated Semantic Search**: Natural language search box (e.g. `C++ automotive`, `Python tester`) powered by dense cosine embeddings; unrelated or dump queries return 0 results.
@@ -80,6 +84,7 @@ This extension acts as the client-side data extractor and interactive recruitmen
 ## Extracted Data Schema
 
 Sample responses:
+
 - `HRM_Extension/sample_response_fetch_job-requests.json`
 - `HRM_Extension/sample_response_fetch_candidate_candidates.json`
 
