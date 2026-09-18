@@ -2,7 +2,7 @@
 Unit and Integration tests for HRM_Backend.
 Tests:
 - Database schema and indexing
-- NLP keyword and experience extraction
+- LLM-driven keyword/experience extraction (disabled-LLM behavior)
 - Local semantic model embedding and cosine similarity
 - Bi-directional pre-calculated matching engine
 - Ingestion of sample data from HRM portal
@@ -13,6 +13,7 @@ import sys
 import unittest
 import tempfile
 import json
+from unittest import mock
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -30,15 +31,15 @@ from database import (
     get_matching_jobs_for_candidate,
     get_db_stats
 )
-from nlp_extractor import (
+from extracting_engine import (
     clean_html,
-    extract_skills,
-    extract_seniority,
-    extract_years_of_experience,
     extract_job_keywords,
     extract_candidate_keywords,
     LocalSemanticModel,
-    get_semantic_model
+    get_semantic_model,
+    LLMExtractor,
+    TaxonomyManager,
+    get_taxonomy_manager
 )
 from matching_engine import (
     compute_match,
@@ -55,8 +56,16 @@ class TestHRMBackend(unittest.TestCase):
         self.db_path = os.path.join(self.temp_dir.name, "test_hrm.db")
         os.environ["HRM_DB_PATH"] = self.db_path
         init_db(self.db_path)
+        # There is no regex fallback: make the LLM deterministically "down" so
+        # tests exercise the empty-extraction path without network access.
+        self._llm_patcher = mock.patch(
+            "extracting_engine.get_llm_extractor",
+            return_value=LLMExtractor(enabled=False, cache_size=16),
+        )
+        self._llm_patcher.start()
 
     def tearDown(self):
+        self._llm_patcher.stop()
         os.environ.pop("HRM_DB_PATH", None)
         self.temp_dir.cleanup()
 
@@ -108,20 +117,21 @@ class TestHRMBackend(unittest.TestCase):
         self.assertNotIn("<p>", cleaned)
         self.assertIn("Design C++ test cases", cleaned)
 
-        # Skill extraction
-        skills = extract_skills("We need someone with Python, C++, Docker and System Test experience.")
-        self.assertIn("python", skills)
-        self.assertIn("c++", skills)
-        self.assertIn("docker", skills)
-        self.assertIn("system test", skills)
+        # Hybrid extraction: with LLM disabled, deterministic regex baseline guarantees
+        # canonical skills, seniority level, and years of experience without network access.
+        job = extract_job_keywords("Senior C++ Developer", "C++ and Python, 3+ years experience", "")
+        self.assertIn("c++", job["skills"])
+        self.assertIn("python", job["skills"])
+        self.assertEqual(job["level"], "Senior")
+        self.assertEqual(job["years_experience"], 3)
 
-        # Seniority extraction
-        self.assertEqual(extract_seniority("Senior Software Engineer"), "Senior")
-        self.assertEqual(extract_seniority("Junior Tester"), "Junior")
-        self.assertEqual(extract_seniority("Middle QA Specialist"), "Middle")
-
-        # Years of experience extraction
-        self.assertEqual(extract_years_of_experience("Require 3+ years in software testing"), 3)
+        cand = extract_candidate_keywords(
+            name="Candidate A", position="Tester", location="Ha Noi",
+            cv_text="C++ embedded developer with 3 years experience",
+        )
+        self.assertIn("c++", cand["skills"])
+        self.assertIn("embedded", cand["skills"])
+        self.assertEqual(cand["years_experience"], 3)
 
     def test_local_semantic_model(self):
         model = get_semantic_model()
@@ -237,7 +247,6 @@ class TestHRMBackend(unittest.TestCase):
                         position=cv.get("position", ""),
                         location=cv.get("location", ""),
                         cv_information=cv.get("cvInformation"),
-                        raw_status=item.get("status"),
                         raw_level=cv.get("level"),
                         raw_experience=cv.get("experience"),
                         cv_urls=cand_urls,
@@ -270,6 +279,7 @@ class TestHRMBackend(unittest.TestCase):
         self.assertGreater(len(matched_cands), 0)
         first_cand = matched_cands[0]
         self.assertEqual(first_cand["status"], "PM_ROUND")
+        # Hybrid baseline extracted skills and role compatibility give strong match score
         self.assertGreater(first_cand["matching_percentage"], 30.0)
 
     def test_fastapi_endpoints(self):
@@ -425,6 +435,110 @@ class TestHRMBackend(unittest.TestCase):
             self.assertEqual(len(res_matches2.json()["candidates"]), 1)
             self.assertEqual(res_matches2.json()["candidates"][0]["status"], "OFFER")
 
+    def test_concurrent_duplicate_ingest_processed_once(self):
+        """
+        Reproduction of the console.log incident: HRM_Ext submits the same job and the same
+        candidate batch concurrently from two browser contexts. Regression: concurrent
+        duplicate submissions must be processed exactly ONCE - the losing submission observes
+        the winner's committed record and only updates metadata. CV download, LLM extraction,
+        and match recalculation must not run twice for the same record.
+        """
+        import threading
+        from fastapi.testclient import TestClient
+        from app import app
+
+        job_id = "dup-job-1"
+        cand_id = "dup-cand-1"
+        results = []
+
+        import time
+        download_calls = []
+        recalc_calls = []
+
+        def fake_download_cv(url, token=None):
+            download_calls.append(url)
+            time.sleep(0.05)
+            return "PDF extracted text covering Python, C, C++, Embedded, LIN, CAN."
+
+        def fake_recalculate_for_job(jid, db_path=None):
+            recalc_calls.append(("job", jid))
+            return 0
+
+        def fake_recalculate_for_candidate(cid, db_path=None):
+            recalc_calls.append(("candidate", cid))
+            return 0
+
+        job_payload = {
+            "id": job_id,
+            "title": "BOSCH - Onsite HCM - AutoSAR Embedded SW Engineer - Ngon Ngu C",
+            "request": "AutoSAR, C/C++, Embedded, LIN, CAN",
+            "jobDescription": "<p>C, C++, AutoSAR, Bootloader, embedded</p>"
+        }
+        batch_payload = {
+            "jobRequestId": job_id,
+            "token": "fake-token",
+            "candidates": [
+                {
+                    "id": cand_id,
+                    "name": "Pham Quoc Tho",
+                    "position": "Embedded Engineer",
+                    "status": "OPEN",
+                    "cvs": ["https://hrm.ltsgroup.tech/dup-cv.pdf"]
+                }
+            ]
+        }
+
+        def submit_job(client):
+            res = client.post("/api/jobs", json=job_payload)
+            results.append(("job", res.json()))
+
+        def submit_batch(client):
+            res = client.post("/api/candidates/batch", json=batch_payload)
+            results.append(("batch", res.json()))
+
+        start = threading.Barrier(4, timeout=15)
+
+        def run(target, client):
+            start.wait(timeout=15)
+            target(client)
+
+        with mock.patch("app.download_and_extract_cv", side_effect=fake_download_cv), \
+             mock.patch("app.recalculate_for_job", side_effect=fake_recalculate_for_job), \
+             mock.patch("app.recalculate_for_candidate", side_effect=fake_recalculate_for_candidate):
+            with TestClient(app) as client:
+                threads = [
+                    threading.Thread(target=run, args=(submit_job, client)),
+                    threading.Thread(target=run, args=(submit_job, client)),
+                    threading.Thread(target=run, args=(submit_batch, client)),
+                    threading.Thread(target=run, args=(submit_batch, client)),
+                ]
+                for threaded in threads:
+                    threaded.start()
+                for threaded in threads:
+                    threaded.join(timeout=120)
+                    self.assertFalse(threaded.is_alive(), "ingest worker thread did not finish")
+
+        job_flags = [res["is_new"] for name, res in results if name == "job"]
+        self.assertEqual(sorted(job_flags), [False, True])
+
+        batch_results = [res for name, res in results if name == "batch"]
+        self.assertEqual(len(batch_results), 2)
+        for br in batch_results:
+            self.assertEqual(br["processed_count"], 1)
+        self.assertEqual(sum(br["new_count"] for br in batch_results), 1)
+        self.assertEqual(sum(br["updated_count"] for br in batch_results), 1)
+
+        self.assertEqual(len(download_calls), 1, "CV must be downloaded exactly once for concurrent duplicates")
+        self.assertEqual(
+            sorted(kind for kind, _ in recalc_calls),
+            ["candidate", "job"],
+            "each new record type must be recalculated exactly once"
+        )
+
+        stats = get_db_stats(self.db_path)
+        self.assertEqual(stats["jobs_count"], 1)
+        self.assertEqual(stats["candidates_count"], 1)
+
     def test_job_semantic_search(self):
         """Test GET /api/jobs?q=... semantic filtering of jobs."""
         from fastapi.testclient import TestClient
@@ -498,8 +612,8 @@ class TestHRMBackend(unittest.TestCase):
             self.assertEqual(res_dump.status_code, 200)
             self.assertEqual(len(res_dump.json()), 0)
 
-    def test_model_selection(self):
-        """Test GET /api/models and POST /api/models/select for Base and Large models."""
+    def test_model_info(self):
+        """Test GET /api/models returns read-only backend LLM/FastEmbed model information."""
         from fastapi.testclient import TestClient
         from app import app
 
@@ -507,27 +621,17 @@ class TestHRMBackend(unittest.TestCase):
             res = client.get("/api/models")
             self.assertEqual(res.status_code, 200)
             data = res.json()
-            self.assertIn("models", data)
-            self.assertGreaterEqual(len(data["models"]), 3)
-            self.assertEqual(data["active_model"], "BAAI/bge-large-en-v1.5")
+            self.assertIn("llm", data)
+            self.assertIn("fastembed", data)
 
-            # Verify only Base and Large models are present (dim 768 or 1024), no small models
-            for m in data["models"]:
-                self.assertNotIn("small", m["id"].lower())
-                self.assertNotIn("minilm", m["id"].lower())
-                self.assertIn(m["dim"], (768, 1024))
+            self.assertIn("model", data["llm"])
+            self.assertIn("enabled", data["llm"])
 
-            # Switch model to base model
-            new_model = "BAAI/bge-base-en-v1.5"
-            res_switch = client.post("/api/models/select", json={"model_name": new_model})
-            self.assertEqual(res_switch.status_code, 200)
-            self.assertEqual(res_switch.json()["active_model"], new_model)
-            self.assertFalse(res_switch.json()["database_cleared"])
-
-            # Switch model with clear_database=True
-            res_switch_clear = client.post("/api/models/select", json={"model_name": "thenlper/gte-large", "clear_database": True})
-            self.assertEqual(res_switch_clear.status_code, 200)
-            self.assertTrue(res_switch_clear.json()["database_cleared"])
+            self.assertIn("models", data["fastembed"])
+            self.assertEqual(len(data["fastembed"]["models"]), 1)
+            self.assertEqual(data["fastembed"]["models"][0]["id"], "BAAI/bge-large-en-v1.5")
+            self.assertEqual(data["fastembed"]["active_model"], "BAAI/bge-large-en-v1.5")
+            self.assertIn("is_loaded", data["fastembed"])
 
 
     def test_clear_database(self):
@@ -551,6 +655,118 @@ class TestHRMBackend(unittest.TestCase):
             # Verify empty
             self.assertEqual(len(client.get("/api/jobs").json()), 0)
             self.assertEqual(len(client.get("/api/candidates").json()), 0)
+
+    def test_taxonomy_manager_crud_and_dynamic_update(self):
+        """Test TaxonomyManager loads taxonomy.json, extracts skills, and dynamically updates novel terms."""
+        temp_tax_file = os.path.join(self.temp_dir.name, "taxonomy.json")
+        mgr = TaxonomyManager(filepath=temp_tax_file)
+
+        # 1. Baseline extraction
+        skills = mgr.extract_skills("Experienced in Python, C++, Docker, and System Test")
+        self.assertIn("python", skills)
+        self.assertIn("c++", skills)
+        self.assertIn("docker", skills)
+        self.assertIn("system test", skills)
+
+        # 2. Seniority & years
+        self.assertEqual(mgr.extract_seniority("Senior Software Engineer"), "Senior")
+        self.assertEqual(mgr.extract_seniority("Lead Embedded Architect"), "Lead")
+        self.assertEqual(mgr.extract_years_of_experience("5+ years of experience"), 5)
+
+        # 3. Dynamic registration of novel skills by LLM
+        novel_skills = ["solidity", "terraform", "langchain"]
+        added = mgr.register_new_skills(novel_skills)
+        self.assertEqual(len(added), 3)
+
+        # 4. Extracted immediately via regex
+        updated_skills = mgr.extract_skills("We need a Solidity smart contract and Terraform cloud engineer with Langchain")
+        self.assertIn("solidity", updated_skills)
+        self.assertIn("terraform", updated_skills)
+        self.assertIn("langchain", updated_skills)
+
+        # 5. Persisted to disk
+        self.assertTrue(os.path.exists(temp_tax_file))
+        with open(temp_tax_file, "r", encoding="utf-8") as f:
+            disk_tax = json.load(f)
+        self.assertIn("solidity", disk_tax["skills"])
+        self.assertIn("terraform", disk_tax["skills"])
+
+    def test_hybrid_extraction_with_llm_enrichment(self):
+        """Test hybrid pipeline merges regex baseline and LLM open-vocabulary extraction."""
+        fake_llm_result = {
+            "skills": ["python", "graphql", "apache kafka"],
+            "years_experience": 4,
+            "level": "Senior",
+            "languages": ["english", "japanese"],
+            "summary": "Experienced Python backend engineer specializing in Kafka streaming."
+        }
+
+        mock_extractor = mock.MagicMock(spec=LLMExtractor)
+        mock_extractor.is_enabled.return_value = True
+        mock_extractor.extract.return_value = fake_llm_result
+
+        with mock.patch("extracting_engine.get_llm_extractor", return_value=mock_extractor):
+            job = extract_job_keywords(
+                title="Senior Backend Engineer",
+                request="Must know Docker and Python",
+                job_description="<p>Hands-on Kafka and GraphQL experience required.</p>"
+            )
+
+            # Baseline regex caught 'docker' and 'python'; LLM caught 'graphql' and 'apache kafka'
+            self.assertIn("docker", job["skills"])
+            self.assertIn("python", job["skills"])
+            self.assertIn("graphql", job["skills"])
+            self.assertIn("apache kafka", job["skills"])
+            self.assertEqual(job["level"], "Senior")
+            self.assertEqual(job["years_experience"], 4)
+
+            # Novel skills should now be registered into the taxonomy!
+            tax_mgr = get_taxonomy_manager()
+            self.assertIn("graphql", tax_mgr.skills)
+
+    def test_cosine_similarity_numpy_safety(self):
+        """Test LocalSemanticModel.cosine_similarity is safe with numpy arrays and floats."""
+        import numpy as np
+        v1 = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+        v2 = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+        sim = LocalSemanticModel.cosine_similarity(v1, v2)
+        self.assertEqual(sim, 1.0)
+
+        # Empty / None / mismatched lengths return 0.0 without throwing
+        self.assertEqual(LocalSemanticModel.cosine_similarity(None, v2), 0.0)
+        self.assertEqual(LocalSemanticModel.cosine_similarity([], v2), 0.0)
+        self.assertEqual(LocalSemanticModel.cosine_similarity(np.array([]), v2), 0.0)
+        self.assertEqual(LocalSemanticModel.cosine_similarity(v1, np.array([0.1])), 0.0)
+
+    def test_cached_skill_matching_performance(self):
+        """Benchmark matching with cached embeddings completes in milliseconds."""
+        import time
+        model = get_semantic_model()
+        job = {
+            "title": "Senior Embedded Engineer",
+            "extracted_keywords": ["c", "c++", "embedded", "autosar", "can bus", "rtos", "unit test"],
+            "extracted_level": "Senior",
+            "embedding": model.get_embedding("Senior Embedded Engineer")
+        }
+        cand = {
+            "name": "Nguyen Van B",
+            "position": "Embedded Developer",
+            "extracted_keywords": ["c", "cpp", "freertos", "autosar", "can bus", "python", "git"],
+            "extracted_level": "Senior",
+            "extracted_experiences": {"years_experience": 4},
+            "embedding": model.get_embedding("Embedded Developer")
+        }
+
+        # First run warms cache if needed
+        compute_match(job, cand)
+
+        t0 = time.time()
+        for _ in range(25):
+            res = compute_match(job, cand)
+        t1 = time.time()
+        total_time = t1 - t0
+        self.assertLess(total_time, 1.5, f"25 candidate matches took {total_time:.3f}s, expected < 1.5s")
+        self.assertGreater(res["matching_percentage"], 50.0)
 
 
 if __name__ == "__main__":

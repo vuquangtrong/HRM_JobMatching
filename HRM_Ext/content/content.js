@@ -11,7 +11,7 @@
  *   1. Active Page (Current job request, candidate table with status badges, spec, json)
  *   2. All Jobs (Semantic search to filter jobs, lists saved jobs, clicking job displays matching candidates)
  *   3. Candidate Search (Query prompt to search candidates, clicking candidate displays matching jobs)
- *   4. Backend Settings (URL config, local model selector from pre-selected list, clear all database option)
+ *   4. Backend Settings (URL config, backend AI model info, clear all database option)
  */
 
 (() => {
@@ -21,6 +21,42 @@
 
   // Config & Constants
   const DEFAULT_BACKEND_URL = 'http://localhost:8765';
+
+  // Curated model metadata for clearer Settings display.
+  // Sources: official model cards/runtime pages (Hugging Face, Ollama, FastEmbed docs).
+  const LLM_MODEL_METADATA = {
+    'qwen2.5:3b': {
+      name: 'Qwen2.5 3B Instruct',
+      params: '3.09B',
+      size: '~1.9 GB (Ollama tag)',
+      context: '32K runtime window',
+      engine: 'Ollama runtime (HTTP chat API)'
+    },
+    'qwen2.5:1.5b': {
+      name: 'Qwen2.5 1.5B Instruct',
+      params: '1.5B',
+      size: '~986 MB (Ollama tag)',
+      context: '32K runtime window',
+      engine: 'Ollama runtime (HTTP chat API)'
+    },
+    'llama3.2:3b': {
+      name: 'Llama 3.2 3B Instruct',
+      params: '3B',
+      size: '~2.0 GB class (quantized tag dependent)',
+      context: 'Tag-dependent',
+      engine: 'Ollama runtime (HTTP chat API)'
+    }
+  };
+
+  const FASTEMBED_MODEL_METADATA = {
+    'baai/bge-large-en-v1.5': {
+      name: 'BGE Large EN v1.5',
+      params: '0.3B',
+      size: '~1.20 GB (ONNX cache)',
+      dims: 1024,
+      engine: 'FastEmbed ONNX Runtime (CPU)'
+    }
+  };
 
   function getBackendUrl() {
     try {
@@ -90,10 +126,8 @@
 
 
   // Settings view state
-  let availableModels = [];
-  let activeModel = '';
-  let isModelLoaded = false;
-  let isSwitchingModel = false;
+  let backendModelInfo = null;
+  let backendHealthInfo = null;
   let isClearingDb = false;
 
   // DOM Elements inside Shadow Root
@@ -192,6 +226,36 @@
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  function getLlmMeta(modelId) {
+    const key = String(modelId || '').trim().toLowerCase();
+    const known = LLM_MODEL_METADATA[key];
+    if (known) return known;
+
+    const guess = key.match(/:(\d+(?:\.\d+)?)b\b/i);
+    const guessedParams = guess ? `${guess[1]}B` : 'N/A';
+    return {
+      name: modelId || 'Unknown LLM Model',
+      params: guessedParams,
+      size: 'N/A',
+      context: 'N/A',
+      engine: 'Ollama/OpenAI-compatible HTTP runtime'
+    };
+  }
+
+  function getFastembedMeta(model) {
+    const id = String(model?.id || '').trim();
+    const key = id.toLowerCase();
+    const known = FASTEMBED_MODEL_METADATA[key] || {};
+    return {
+      id,
+      name: model?.name || known.name || id || 'Unknown FastEmbed Model',
+      params: known.params || 'N/A',
+      size: model?.size || known.size || 'N/A',
+      dims: model?.dim || known.dims || 'N/A',
+      engine: known.engine || 'FastEmbed ONNX Runtime (CPU)'
+    };
   }
 
   /**
@@ -728,18 +792,25 @@
 
   // 4. Backend Settings View
   function renderSettingsView() {
-    const currentModelInfo = availableModels.find(m => m.id === activeModel) || {
-      id: activeModel || 'BAAI/bge-large-en-v1.5',
-      name: activeModel ? activeModel.split('/').pop() : 'BGE Large EN v1.5 (Default)',
-      dim: 1024,
-      size: '~1.2GB'
-    };
-
-    const modelOptionsHtml = availableModels.map(m => `
-      <option value="${escapeHtml(m.id)}" ${m.id === activeModel ? 'selected' : ''}>
-        ${escapeHtml(m.name)} (${m.dim}d, ${m.size})
-      </option>
-    `).join('');
+    const llm = backendModelInfo?.llm || {};
+    const llmRuntime = llm.runtime || {};
+    const fastembed = backendModelInfo?.fastembed || {};
+    const llmModelId = llm.model || 'qwen2.5:3b';
+    const llmMeta = getLlmMeta(llmModelId);
+    const llmProvider = String(llmRuntime.provider || 'ollama').toLowerCase();
+    const llmDevice = llmRuntime.device || 'Unknown';
+    const llmTransport = llmRuntime.transport || 'HTTP chat API';
+    const llmEngine = llmProvider === 'ollama'
+      ? `Ollama on ${llmDevice}, served via ${llmTransport}`
+      : `${llmRuntime.provider || 'OpenAI-compatible runtime'} on ${llmDevice}, served via ${llmTransport}`;
+    const activeFastembed = fastembed.active_model || 'BAAI/bge-large-en-v1.5';
+    const isFastembedLoaded = !!fastembed.is_loaded;
+    const fastembedEngine = backendHealthInfo?.local_model || 'FastEmbed (ONNX)';
+    const fastembedModels = Array.isArray(fastembed.models) && fastembed.models.length
+      ? fastembed.models
+      : [{ id: 'BAAI/bge-large-en-v1.5', name: 'BGE Large EN v1.5', dim: 1024, size: '~1.20 GB' }];
+    const fastembedMeta = getFastembedMeta(fastembedModels[0]);
+    const fastembedResolvedEngine = isFastembedLoaded ? fastembedMeta.engine : (fastembed.fallback || fastembedEngine);
 
     return `
       <div class="hrm-ext-stack-lg hrm-ext-full-width">
@@ -760,38 +831,48 @@
           </div>
         </div>
 
-        <!-- Local AI Model Selection -->
+        <!-- Backend AI Models (Read-only) -->
         <div class="hrm-ext-card">
-          <div class="hrm-ext-card-title">Local AI Semantic Model</div>
+          <div class="hrm-ext-card-title">Backend AI Models</div>
 
-          <!-- Current Selected Model Display -->
+          <!-- LLM Model -->
           <div class="hrm-ext-panel-soft">
             <div class="hrm-ext-row-between">
-              <span class="hrm-ext-section-label hrm-ext-section-label-caps">CURRENT SELECTED MODEL</span>
-              <span class="hrm-ext-badge hrm-ext-badge-xs ${isModelLoaded ? 'status-green' : 'status-amber'}">
-                ${isModelLoaded ? 'Active & Loaded' : 'Fallback Vectorizer'}
+              <span class="hrm-ext-section-label hrm-ext-section-label-caps">LLM MODEL</span>
+              <span class="hrm-ext-badge hrm-ext-badge-xs ${llm.enabled ? 'status-green' : 'status-red'}">
+                ${llm.enabled ? 'Enabled' : 'Disabled'}
               </span>
             </div>
             <div class="hrm-ext-title-md hrm-ext-mt-4">
-              ${escapeHtml(currentModelInfo.name || currentModelInfo.id)}
+              ${escapeHtml(llmMeta.name)}
             </div>
-            <div class="hrm-ext-model-meta-row">
-              <span class="hrm-ext-badge status-purple">${currentModelInfo.dim} Dimensions</span>
-              <span>Size: <strong>${currentModelInfo.size}</strong> • <span class="hrm-ext-model-id">${escapeHtml(currentModelInfo.id)}</span></span>
+            <div class="hrm-ext-model-meta-row hrm-ext-mt-6">
+              <span><span class="hrm-ext-model-id">${escapeHtml(llmModelId)}</span></span>
             </div>
+            <div class="hrm-ext-help-text">Metadata: Params ${escapeHtml(llmMeta.params)} • Size ${escapeHtml(llmMeta.size)} • Context ${escapeHtml(llmMeta.context)}</div>
+            <div class="hrm-ext-help-text">Inference Engine: ${escapeHtml(llmEngine)}</div>
+          </div>
+
+          <!-- FastEmbed Model -->
+          <div class="hrm-ext-panel-soft hrm-ext-mt-10">
+            <div class="hrm-ext-row-between">
+              <span class="hrm-ext-section-label hrm-ext-section-label-caps">FASTEMBED MODEL</span>
+              <span class="hrm-ext-badge hrm-ext-badge-xs ${isFastembedLoaded ? 'status-green' : 'status-amber'}">
+                ${isFastembedLoaded ? 'Loaded' : 'Fallback Vectorizer'}
+              </span>
+            </div>
+            <div class="hrm-ext-title-md hrm-ext-mt-4">
+              ${escapeHtml(fastembedMeta.name)}
+            </div>
+            <div class="hrm-ext-model-meta-row hrm-ext-mt-6">
+              <span><span class="hrm-ext-model-id">${escapeHtml(fastembedMeta.id || activeFastembed)}</span></span>
+            </div>
+            <div class="hrm-ext-help-text">Metadata: Params ${escapeHtml(fastembedMeta.params)} • Size ${escapeHtml(fastembedMeta.size)} • Dimensions ${escapeHtml(String(fastembedMeta.dims))}</div>
+            <div class="hrm-ext-help-text">Inference Engine: ${escapeHtml(fastembedResolvedEngine)}</div>
           </div>
 
           <div class="hrm-ext-card-desc hrm-ext-mt-6">
-            Choose a local embedding model for semantic candidate-job matching:
-          </div>
-          <div class="hrm-ext-row-input hrm-ext-mt-4">
-            <select id="hrm-ext-model-select" class="hrm-ext-select hrm-ext-input-grow">
-              ${modelOptionsHtml || `<option value="${escapeHtml(activeModel)}">${escapeHtml(activeModel || 'Loading models...')}</option>`}
-            </select>
-            <button type="button" id="hrm-ext-apply-model-btn" class="hrm-ext-btn-primary" ${isSwitchingModel ? 'disabled' : ''}>${isSwitchingModel ? 'Applying...' : 'Apply Model'}</button>
-          </div>
-          <div id="hrm-ext-model-feedback" class="hrm-ext-help-text">
-            Note: Changing models requires clearing the database first to prevent vector dimension mismatches.
+            Model configuration is managed by backend; selection is disabled in extension.
           </div>
         </div>
 
@@ -861,7 +942,7 @@
         } else if (mainPage === 'search' && !candidateSearchResults.length) {
           searchCandidates('');
         } else if (mainPage === 'settings') {
-          loadModels();
+          loadBackendModelInfo();
         }
         updateDrawerContent();
       });
@@ -1020,135 +1101,6 @@
       });
     }
 
-    const applyModelBtn = container.querySelector('#hrm-ext-apply-model-btn');
-    const modelSelect = container.querySelector('#hrm-ext-model-select');
-    const modelFeedbackEl = container.querySelector('#hrm-ext-model-feedback');
-    if (modelSelect && modelFeedbackEl) {
-      modelSelect.addEventListener('change', () => {
-        const chosen = modelSelect.value;
-        if (chosen !== activeModel) {
-          const chosenInfo = availableModels.find(m => m.id === chosen);
-          const currentInfo = availableModels.find(m => m.id === activeModel);
-          const dimDiff = currentInfo && chosenInfo && currentInfo.dim !== chosenInfo.dim
-            ? ` (${currentInfo.dim}d → ${chosenInfo.dim}d)`
-            : '';
-          modelFeedbackEl.innerHTML = `<span class="hrm-ext-feedback-warning">Selected: ${escapeHtml(chosenInfo?.name || chosen)}${dimDiff}. Note: Changing models requires clearing the database first.</span>`;
-        } else {
-          modelFeedbackEl.innerHTML = '<span class="hrm-ext-feedback-default">Note: Changing models requires clearing the database first to prevent vector dimension mismatches.</span>';
-        }
-      });
-    }
-
-    if (applyModelBtn && modelSelect) {
-      applyModelBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const chosenModel = modelSelect.value;
-        const currentModelObj = availableModels.find(m => m.id === activeModel) || { id: activeModel, name: activeModel || 'Current Model', dim: 1024 };
-        const newModelObj = availableModels.find(m => m.id === chosenModel) || { id: chosenModel, name: chosenModel, dim: 1024 };
-
-        if (chosenModel === activeModel) {
-          if (modelFeedbackEl) {
-            modelFeedbackEl.innerHTML = `<span class="hrm-ext-feedback-success">Model '${escapeHtml(currentModelObj.name)}' is already currently selected.</span>`;
-          }
-          return;
-        }
-
-        // Query database stats to check if existing records exist
-        let jobsCount = 0;
-        let candsCount = 0;
-        try {
-          const healthRes = await fetch(`${getBackendUrl()}/api/health`);
-          if (healthRes.ok) {
-            const healthData = await healthRes.json();
-            jobsCount = healthData.stats?.jobs_count || 0;
-            candsCount = healthData.stats?.candidates_count || 0;
-          }
-        } catch (err) {
-          console.warn('[HRM Extension] Failed to check db stats:', err);
-        }
-
-        const hasData = (jobsCount > 0 || candsCount > 0);
-
-        const executeSwitch = async (clearDb) => {
-          isSwitchingModel = true;
-          if (modelFeedbackEl) {
-            modelFeedbackEl.innerHTML = '<span class="hrm-ext-feedback-loading">Switching model in memory...</span>';
-          }
-          updateDrawerContent();
-
-          try {
-            if (clearDb) {
-              await fetch(`${getBackendUrl()}/api/database/clear`, { method: 'POST' });
-              backendJobs = [];
-              candidateSearchResults = [];
-              selectedJob = null;
-              selectedCandidate = null;
-              backendSyncStatus = { synced: false, time: null, count: 0, newCount: 0, updatedCount: 0 };
-              totalCandidatesCount = 0;
-            }
-
-
-            const res = await fetch(`${getBackendUrl()}/api/models/select`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ model_name: chosenModel, clear_database: clearDb })
-            });
-            if (res.ok) {
-              const data = await res.json();
-              activeModel = data.active_model;
-              isModelLoaded = data.is_loaded;
-              alert(`Switched model to: ${data.active_model}${clearDb ? '\nDatabase was cleared to prevent vector dimension mismatch.' : ''}`);
-            } else {
-              alert(`Failed to switch model (HTTP ${res.status})`);
-            }
-          } catch (err) {
-            alert(`Model selection error: ${err.message}`);
-          } finally {
-            isSwitchingModel = false;
-            updateDrawerContent();
-          }
-        };
-
-        if (hasData) {
-          const dimensionNote = currentModelObj.dim !== newModelObj.dim
-            ? `Embedding dimension changes from <strong>${currentModelObj.dim}d</strong> to <strong>${newModelObj.dim}d</strong>.`
-            : `Different model architectures use incompatible latent coordinate spaces.`;
-
-          // Show popup to tell user to clear database first
-          showModal({
-            title: 'Dimension Mismatch: Clear Database Required',
-            bodyHtml: `
-              <div class="hrm-ext-modal-warning-box">
-                <strong>Warning:</strong> The database currently contains <strong>${jobsCount} job(s)</strong> and <strong>${candsCount} candidate(s)</strong> embedded with the previous model.
-              </div>
-              <div class="hrm-ext-modal-warning-copy">
-                Switching from <strong>${escapeHtml(currentModelObj.name)}</strong> (${currentModelObj.dim}d) to <strong>${escapeHtml(newModelObj.name)}</strong> (${newModelObj.dim}d) causes vector dimension and latent space mismatches with existing data. ${dimensionNote}
-              </div>
-              <div class="hrm-ext-modal-warning-note hrm-ext-modal-warning-note-box">
-                <strong>Please clear the database first</strong> before changing the model so all jobs and candidates are re-embedded consistently.
-              </div>
-            `,
-            confirmText: 'Clear Database & Switch',
-            confirmClass: 'hrm-ext-btn-danger',
-            cancelText: 'Cancel',
-            onConfirm: async () => {
-              await executeSwitch(true);
-            },
-            onCancel: () => {
-              if (modelSelect) modelSelect.value = activeModel;
-              if (modelFeedbackEl) {
-                modelFeedbackEl.innerHTML = '<span class="hrm-ext-feedback-default">Model switch cancelled. Cleared database required first.</span>';
-              }
-            }
-          });
-        } else {
-          // Database is already empty, switch directly
-          await executeSwitch(false);
-        }
-      });
-    }
-
-
     const clearDbBtn = container.querySelector('#hrm-ext-clear-db-btn');
     const clearDbFeedbackEl = container.querySelector('#hrm-ext-clear-db-feedback');
     if (clearDbBtn) {
@@ -1289,86 +1241,21 @@
     }
   }
 
-  async function loadModels() {
+  async function loadBackendModelInfo() {
     try {
-      const res = await fetch(`${getBackendUrl()}/api/models`);
-      if (res.ok) {
-        const data = await res.json();
-        availableModels = data.models || [];
-        activeModel = data.active_model;
-        isModelLoaded = data.is_loaded;
-        updateDrawerContent();
-      }
+      const [modelsRes, healthRes] = await Promise.all([
+        fetch(`${getBackendUrl()}/api/models`),
+        fetch(`${getBackendUrl()}/api/health`)
+      ]);
+
+      backendModelInfo = modelsRes.ok ? await modelsRes.json() : null;
+      backendHealthInfo = healthRes.ok ? await healthRes.json() : null;
     } catch (e) {
-      console.warn('[HRM Extension] Failed to load models:', e);
+      console.warn('[HRM Extension] Failed to load backend model info:', e);
+      backendModelInfo = null;
+      backendHealthInfo = null;
     }
-  }
-
-  /**
-   * Helper to display a clean in-drawer modal dialog (for dimension warnings, confirmations, etc.)
-   */
-  function showModal({ title, bodyHtml, confirmText, confirmClass, cancelText, onConfirm, onCancel }) {
-    if (!shadowRoot) return;
-    const container = shadowRoot.querySelector('#hrm-ext-modal-container');
-    if (!container) return;
-
-    container.innerHTML = `
-      <div class="hrm-ext-modal-overlay">
-        <div class="hrm-ext-modal-card">
-          <div class="hrm-ext-modal-header">
-            <div class="hrm-ext-modal-title">${escapeHtml(title)}</div>
-            <button type="button" class="hrm-ext-header-btn hrm-ext-modal-close-btn modal-close-btn">&times;</button>
-          </div>
-          <div class="hrm-ext-modal-body">${bodyHtml}</div>
-          <div class="hrm-ext-modal-actions">
-            ${cancelText ? `<button type="button" class="hrm-ext-sm-btn modal-cancel-btn">${escapeHtml(cancelText)}</button>` : ''}
-            ${confirmText ? `<button type="button" class="${confirmClass || 'hrm-ext-btn-primary'} modal-confirm-btn">${escapeHtml(confirmText)}</button>` : ''}
-          </div>
-        </div>
-      </div>
-    `;
-
-    const close = () => {
-      container.innerHTML = '';
-    };
-
-    const closeBtn = container.querySelector('.modal-close-btn');
-    if (closeBtn) {
-      closeBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        close();
-        if (onCancel) onCancel();
-      });
-    }
-
-    const cancelBtn = container.querySelector('.modal-cancel-btn');
-    if (cancelBtn) {
-      cancelBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        close();
-        if (onCancel) onCancel();
-      });
-    }
-
-    const confirmBtn = container.querySelector('.modal-confirm-btn');
-    if (confirmBtn) {
-      confirmBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        close();
-        if (onConfirm) await onConfirm();
-      });
-    }
-
-    const overlay = container.querySelector('.hrm-ext-modal-overlay');
-    if (overlay) {
-      overlay.addEventListener('click', (e) => {
-        if (e.target === overlay) {
-          e.stopPropagation();
-          close();
-          if (onCancel) onCancel();
-        }
-      });
-    }
+    updateDrawerContent();
   }
 
   /**
@@ -1413,7 +1300,6 @@
           </div>
         </div>
         <div class="hrm-ext-body"></div>
-        <div id="hrm-ext-modal-container"></div>
       </div>
     `;
 

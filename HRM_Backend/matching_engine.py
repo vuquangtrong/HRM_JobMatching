@@ -22,7 +22,7 @@ from database import (
     save_match_result,
     save_match_results_batch
 )
-from nlp_extractor import LocalSemanticModel, get_semantic_model
+from extracting_engine import LocalSemanticModel, get_semantic_model, get_cached_skill_embedding
 
 logger = logging.getLogger("hrm.matching_engine")
 
@@ -56,9 +56,8 @@ def calculate_role_compatibility(job_title: str, candidate_position: str) -> flo
         return 0.5
 
     # 1. AI Semantic Embedding Similarity of functional roles
-    model = get_semantic_model()
-    t_emb = model.get_embedding(t_clean)
-    p_emb = model.get_embedding(p_clean)
+    t_emb = get_cached_skill_embedding(t_clean)
+    p_emb = get_cached_skill_embedding(p_clean)
     sem_role_sim = LocalSemanticModel.cosine_similarity(t_emb, p_emb)
 
     # 2. Functional Domain Heuristics
@@ -163,18 +162,19 @@ def compute_match(job: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[str, A
     # 1. AI Soft Semantic Skills Matching
     if job_skills:
         cand_skills_lower = [s.lower() for s in cand_skills]
+        cand_skill_embs = [get_cached_skill_embedding(cs) for cs in cand_skills]
+
         for js in job_skills:
             js_lower = js.lower()
             if js_lower in cand_skills_lower:
                 matched_skills.append(js)
                 skill_match_scores.append(1.0)
             else:
-                # Semantic similarity check with candidate skills
-                js_emb = model.get_embedding(js)
+                # Semantic similarity check with candidate skills using cached embeddings
+                js_emb = get_cached_skill_embedding(js)
                 best_sim = 0.0
                 best_cs = None
-                for cs in cand_skills:
-                    cs_emb = model.get_embedding(cs)
+                for cs, cs_emb in zip(cand_skills, cand_skill_embs):
                     sim = LocalSemanticModel.cosine_similarity(js_emb, cs_emb)
                     if sim > best_sim:
                         best_sim = sim

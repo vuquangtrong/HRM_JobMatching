@@ -6,9 +6,10 @@ FastAPI service running on custom port 8765.
 import os
 import re
 import logging
+import threading
 import concurrent.futures
 from typing import List, Dict, Any, Optional, Tuple
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,14 +30,17 @@ from database import (
     get_db_stats,
     clear_all_data
 )
-from nlp_extractor import (
+from extracting_engine import (
     extract_job_keywords,
     extract_candidate_keywords,
-    extract_skills,
     download_and_extract_cv,
     get_semantic_model,
     LocalSemanticModel,
-    AVAILABLE_MODELS
+    SEMANTIC_MODEL_ID,
+    SEMANTIC_MODEL_DIM,
+    get_llm_extractor,
+    LLM_MODEL,
+    get_taxonomy_manager
 )
 from matching_engine import (
     recalculate_for_job,
@@ -49,6 +53,63 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger("hrm.backend")
+
+
+# --------------------------------------------------------------------------
+# Idempotency & Concurrency Guards
+# Bounded ref-counted per-record locks prevent duplicate processing and memory leaks.
+# In-flight download futures ensure concurrent duplicate batches download each CV exactly once.
+# --------------------------------------------------------------------------
+
+_record_locks_guard = threading.Lock()
+_record_locks: Dict[str, threading.Lock] = {}
+_record_lock_refcount: Dict[str, int] = {}
+
+
+@contextmanager
+def record_lock(record_id: str):
+    """Context manager providing per-record locking with automatic memory cleanup."""
+    with _record_locks_guard:
+        lock = _record_locks.setdefault(record_id, threading.Lock())
+        _record_lock_refcount[record_id] = _record_lock_refcount.get(record_id, 0) + 1
+
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+        with _record_locks_guard:
+            _record_lock_refcount[record_id] -= 1
+            if _record_lock_refcount[record_id] <= 0:
+                _record_lock_refcount.pop(record_id, None)
+                _record_locks.pop(record_id, None)
+
+
+def _get_record_lock(record_id: str):
+    """Backward-compatible helper returning a record_lock context manager."""
+    return record_lock(record_id)
+
+
+_cv_download_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+_cv_download_guard = threading.Lock()
+_cv_download_inflight: Dict[str, concurrent.futures.Future] = {}
+
+
+def _do_download_cv(cid: str, url: str, name: str, token: str) -> Tuple[str, str]:
+    """Worker task executing CV download and text extraction."""
+    try:
+        text = download_and_extract_cv(url, token)
+        logger.info(f"Downloaded CV for '{name}' in thread pool ({len(text)} chars)")
+        return cid, text
+    except Exception as e:
+        logger.warning(f"Could not download CV for '{name}' from {url}: {e}")
+        return cid, ""
+
+
+def _release_cv_download(candidate_id: str) -> None:
+    """Clears the in-flight CV download marker once candidate processing completes."""
+    with _cv_download_guard:
+        _cv_download_inflight.pop(candidate_id, None)
 
 
 # Initialize DB tables on import
@@ -118,12 +179,6 @@ class BatchCandidatePayload(BaseModel):
     candidates: List[CandidatePayload]
 
 
-class SelectModelPayload(BaseModel):
-    model_name: str = Field(..., description="Local model name/ID to activate")
-    clear_database: bool = Field(False, description="Clear database to avoid dimension/latent space mismatches")
-
-
-
 # ==========================================
 # REST Endpoints
 # ==========================================
@@ -152,11 +207,25 @@ def ingest_job(payload: JobPayload, force_recalculate: bool = False):
     Extracts keywords, level, and embeddings.
     Calculates pre-calculated matches with all saved candidates ONLY IF the job is new
     or force_recalculate is explicitly requested.
+    Concurrent duplicate submissions of the same job are serialized per job id so the
+    expensive extraction and pre-calculation run only once.
     """
     title = payload.title or "Untitled Job"
     req = payload.request or ""
     desc = payload.jobDescription or ""
 
+    with _get_record_lock(payload.id):
+        return _ingest_job_locked(payload, title, req, desc, force_recalculate)
+
+
+def _ingest_job_locked(
+    payload: JobPayload,
+    title: str,
+    req: str,
+    desc: str,
+    force_recalculate: bool
+) -> Dict[str, Any]:
+    """Executes the actual job ingest while holding the per-record lock."""
     existing_job = get_job_by_id(payload.id)
     is_new = existing_job is None
 
@@ -219,15 +288,16 @@ def compute_search_relevance(
     extracted_keywords: List[str],
     doc_embedding: Optional[List[float]],
     q_vec: List[float],
-    query_skills: List[str],
+    query_skills: Optional[List[str]] = None,
     is_dense: Optional[bool] = None
 ) -> float:
     """
     Computes search relevance score [0.0, 100.0] combining:
     1. Exact query match in text fields
     2. Token-level overlap on non-stop words
-    3. AI skill concept overlap between query and document
-    4. Bipolar semantic embedding cosine similarity (baseline-corrected for dense transformers)
+    3. Skill token overlap between query and stored document skills
+    4. Concept-to-concept overlap for recognized skills
+    5. Bipolar semantic embedding cosine similarity (baseline-corrected for dense transformers)
     Returns 0.0 if there is neither keyword/concept match nor meaningful semantic similarity.
     """
     q_lower = query_text.strip().lower()
@@ -247,13 +317,13 @@ def compute_search_relevance(
     if content_tokens:
         kw_score += 0.35 * (matched_tokens / len(content_tokens))
 
-    # 3. AI Skill Concept overlap
+    # 3. Skill token overlap with stored document skills (LLM-extracted)
     doc_skills_lower = [s.lower() for s in (extracted_keywords or [])]
     skill_hits = sum(1 for t in content_tokens if any(t == s or t in s.split() for s in doc_skills_lower))
     if content_tokens and skill_hits:
         kw_score += 0.40 * (skill_hits / len(content_tokens))
 
-    # Concept-to-concept overlap
+    # 4. Concept-to-concept overlap for recognized skills
     if query_skills:
         concept_matches = sum(1 for qs in query_skills if qs.lower() in doc_skills_lower)
         if concept_matches:
@@ -261,7 +331,7 @@ def compute_search_relevance(
 
     kw_score = min(1.0, kw_score)
 
-    # 4. Dense / Bipolar semantic similarity
+    # 5. Dense / Bipolar semantic similarity
     if is_dense is None:
         model = get_semantic_model()
         is_dense = model.fastembed_model is not None
@@ -275,7 +345,7 @@ def compute_search_relevance(
         # Bipolar signed hash vectorizer is zero-mean orthogonal centered at 0.0
         norm_sem = max(0.0, raw_sem)
 
-    # 5. Combined relevance calculation
+    # 6. Combined relevance calculation
     if kw_score > 0 and norm_sem > 0:
         relevance = round(min(100.0, (kw_score * 60.0) + (norm_sem * 40.0)), 1)
     elif kw_score > 0:
@@ -300,10 +370,11 @@ def list_jobs(
         return all_jobs
 
     query_text = q.strip().lower()
+    tax_mgr = get_taxonomy_manager()
+    query_skills = tax_mgr.extract_skills(query_text)
     model = get_semantic_model()
     is_dense = model.fastembed_model is not None
     q_vec = model.get_embedding(query_text)
-    query_skills = extract_skills(query_text)
 
     # Fetch jobs with embeddings in a single query to eliminate N+1 overhead
     jobs_with_emb = get_all_jobs_with_embeddings()
@@ -369,87 +440,101 @@ def process_single_candidate(
     Helper to save candidate.
     Only extracts embeddings, downloads CV, and recalculates matches IF the candidate is NEW.
     If candidate already exists, updates status and basic info without expensive matching recalculation.
+    Serialized per candidate id: concurrent duplicate submissions of the same candidate process
+    it exactly once; the losing submission falls back to the cheap metadata update.
     """
-    existing_cand = get_candidate_by_id(cand_payload.id)
-    is_new = existing_cand is None
+    with _get_record_lock(cand_payload.id):
+        return _process_single_candidate_locked(cand_payload, token, prefetched_cv_text)
 
-    if not is_new:
-        # Existing candidate: status, location or details might be updated!
-        # Do NOT re-download CV, do NOT regenerate heavy embedding, do NOT run recalculate_for_candidate!
-        cand_data = {
-            "id": cand_payload.id,
-            "application_id": cand_payload.application_id or existing_cand.get("application_id", ""),
-            "code": cand_payload.code or existing_cand.get("code", ""),
-            "name": cand_payload.name or existing_cand.get("name", ""),
-            "position": cand_payload.position or existing_cand.get("position", ""),
-            "location": cand_payload.location or existing_cand.get("location", ""),
-            "status": cand_payload.status or existing_cand.get("status", "OPEN"),
-            "cv_urls": cand_payload.cvs or existing_cand.get("cv_urls", []),
-            "cv_text": existing_cand.get("cv_text", ""),
-            "extracted_keywords": existing_cand.get("extracted_keywords", []),
-            "extracted_experiences": existing_cand.get("extracted_experiences", {}),
-            "extracted_level": cand_payload.level or existing_cand.get("extracted_level", ""),
-            "embedding": existing_cand.get("embedding"),
-            "raw_data": cand_payload.raw_data or cand_payload.model_dump()
-        }
-        saved, _ = save_or_update_candidate(cand_data)
-        logger.info(f"Existing candidate '{saved.get('name')}' (ID: {cand_payload.id}) status updated to '{cand_data['status']}'. Skipped matching recalculation.")
-        return saved, False
-    else:
-        # Brand new candidate: extract keywords, embeddings, save to DB, and recalculate
-        cv_urls = cand_payload.cvs or []
-        cv_text = prefetched_cv_text or ""
 
-        # Try downloading first CV PDF if token provided and not prefetched
-        if not cv_text and cv_urls and token:
-            first_url = cv_urls[0]
-            try:
-                cv_text = download_and_extract_cv(first_url, token)
-                logger.info(f"Successfully downloaded and extracted CV for candidate '{cand_payload.name or 'Unknown Candidate'}'. Data length: {len(cv_text)} characters.")
-            except Exception as e:
-                logger.warning(f"Could not download CV from {first_url}: {e}")
+def _process_single_candidate_locked(
+    cand_payload: CandidatePayload,
+    token: Optional[str],
+    prefetched_cv_text: Optional[str]
+) -> Tuple[Dict[str, Any], bool]:
+    """Executes the actual candidate ingest while holding the per-record lock."""
+    try:
+        existing_cand = get_candidate_by_id(cand_payload.id)
+        is_new = existing_cand is None
 
-        raw_langs = None
-        if cand_payload.raw_data and isinstance(cand_payload.raw_data, dict):
-            raw_langs = cand_payload.raw_data.get("languages") or (cand_payload.raw_data.get("cv", {}) or {}).get("languages")
+        if not is_new:
+            # Existing candidate: status, location or details might be updated!
+            # Do NOT re-download CV, do NOT regenerate heavy embedding, do NOT run recalculate_for_candidate!
+            cand_data = {
+                "id": cand_payload.id,
+                "application_id": cand_payload.application_id or existing_cand.get("application_id", ""),
+                "code": cand_payload.code or existing_cand.get("code", ""),
+                "name": cand_payload.name or existing_cand.get("name", ""),
+                "position": cand_payload.position or existing_cand.get("position", ""),
+                "location": cand_payload.location or existing_cand.get("location", ""),
+                "status": cand_payload.status or existing_cand.get("status", "OPEN"),
+                "cv_urls": cand_payload.cvs or existing_cand.get("cv_urls", []),
+                "cv_text": existing_cand.get("cv_text", ""),
+                "extracted_keywords": existing_cand.get("extracted_keywords", []),
+                "extracted_experiences": existing_cand.get("extracted_experiences", {}),
+                "extracted_level": cand_payload.level or existing_cand.get("extracted_level", ""),
+                "embedding": existing_cand.get("embedding"),
+                "raw_data": cand_payload.raw_data or cand_payload.model_dump()
+            }
+            saved, _ = save_or_update_candidate(cand_data)
+            logger.info(f"Existing candidate '{saved.get('name')}' (ID: {cand_payload.id}) status updated to '{cand_data['status']}'. Skipped matching recalculation.")
+            return saved, False
+        else:
+            # Brand new candidate: extract keywords, embeddings, save to DB, and recalculate
+            cv_urls = cand_payload.cvs or []
+            cv_text = prefetched_cv_text or ""
 
-        extracted = extract_candidate_keywords(
-            name=cand_payload.name or "",
-            position=cand_payload.position or "",
-            location=cand_payload.location or "",
-            cv_information=cand_payload.cvInformation,
-            cv_text=cv_text,
-            raw_status=cand_payload.status,
-            raw_level=cand_payload.level,
-            raw_experience=cand_payload.experience,
-            cv_urls=cv_urls,
-            raw_languages=raw_langs
-        )
+            # Try downloading first CV PDF if token provided and not prefetched
+            if not cv_text and cv_urls and token:
+                first_url = cv_urls[0]
+                try:
+                    cv_text = download_and_extract_cv(first_url, token)
+                    logger.info(f"Successfully downloaded and extracted CV for candidate '{cand_payload.name or 'Unknown Candidate'}'. Data length: {len(cv_text)} characters.")
+                except Exception as e:
+                    logger.warning(f"Could not download CV from {first_url}: {e}")
 
-        cand_data = {
-            "id": cand_payload.id,
-            "application_id": cand_payload.application_id or "",
-            "code": cand_payload.code or "",
-            "name": cand_payload.name or "Unknown Candidate",
-            "position": cand_payload.position or "",
-            "location": cand_payload.location or "",
-            "status": cand_payload.status or "OPEN",
-            "cv_urls": cv_urls,
-            "cv_text": cv_text,
-            "extracted_keywords": extracted["skills"],
-            "extracted_experiences": {
-                "years_experience": extracted["years_experience"],
-                "summary": extracted["summary"]
-            },
-            "extracted_level": extracted["level"],
-            "embedding": extracted["embedding"],
-            "raw_data": cand_payload.raw_data or cand_payload.model_dump()
-        }
+            raw_langs = None
+            if cand_payload.raw_data and isinstance(cand_payload.raw_data, dict):
+                raw_langs = cand_payload.raw_data.get("languages") or (cand_payload.raw_data.get("cv", {}) or {}).get("languages")
 
-        saved, _ = save_or_update_candidate(cand_data)
-        recalculate_for_candidate(cand_payload.id)
-        logger.info(f"New candidate '{saved.get('name')}' (ID: {cand_payload.id}) added. Precalculated matches with all jobs.")
-        return saved, True
+            extracted = extract_candidate_keywords(
+                name=cand_payload.name or "",
+                position=cand_payload.position or "",
+                location=cand_payload.location or "",
+                cv_information=cand_payload.cvInformation,
+                cv_text=cv_text,
+                raw_level=cand_payload.level,
+                raw_experience=cand_payload.experience,
+                cv_urls=cv_urls,
+                raw_languages=raw_langs
+            )
+
+            cand_data = {
+                "id": cand_payload.id,
+                "application_id": cand_payload.application_id or "",
+                "code": cand_payload.code or "",
+                "name": cand_payload.name or "Unknown Candidate",
+                "position": cand_payload.position or "",
+                "location": cand_payload.location or "",
+                "status": cand_payload.status or "OPEN",
+                "cv_urls": cv_urls,
+                "cv_text": cv_text,
+                "extracted_keywords": extracted["skills"],
+                "extracted_experiences": {
+                    "years_experience": extracted["years_experience"],
+                    "summary": extracted["summary"]
+                },
+                "extracted_level": extracted["level"],
+                "embedding": extracted["embedding"],
+                "raw_data": cand_payload.raw_data or cand_payload.model_dump()
+            }
+
+            saved, _ = save_or_update_candidate(cand_data)
+            recalculate_for_candidate(cand_payload.id)
+            logger.info(f"New candidate '{saved.get('name')}' (ID: {cand_payload.id}) added. Precalculated matches with all jobs.")
+            return saved, True
+    finally:
+        _release_cv_download(cand_payload.id)
 
 
 @app.post("/api/candidates")
@@ -467,50 +552,64 @@ def ingest_candidate(payload: CandidatePayload):
 def batch_ingest_candidates(payload: BatchCandidatePayload):
     """
     Batch ingests candidates extracted by HRM_Ext.
-    Extracts status (e.g. PM_ROUND), position, keywords, and pre-calculates matches ONLY for new candidates.
-    Downloads CVs in parallel using ThreadPoolExecutor for new candidates.
+    Downloads CVs in parallel and coordinates duplicate concurrent submissions so CVs
+    are downloaded strictly once. Ingests candidates and pre-calculates matches.
     """
     token = payload.token
     candidates = payload.candidates
     cv_texts_map = {}
 
-    # Identify brand new candidates requiring CV download
+    # Coordinate CV downloads concurrently
     if token and candidates:
-        to_download = []
+        active_futures: Dict[str, concurrent.futures.Future] = {}
         for cand in candidates:
-            if not get_candidate_by_id(cand.id) and cand.cvs:
-                to_download.append((cand.id, cand.cvs[0], cand.name or "Unknown Candidate"))
+            with record_lock(cand.id):
+                already_exists = get_candidate_by_id(cand.id) is not None
+            if already_exists or not cand.cvs:
+                continue
 
-        if to_download:
-            def _download_task(item):
-                cid, url, name = item
-                try:
-                    text = download_and_extract_cv(url, token)
-                    logger.info(f"Downloaded CV for '{name}' in thread pool ({len(text)} chars)")
-                    return cid, text
-                except Exception as e:
-                    logger.warning(f"Could not download CV for '{name}' from {url}: {e}")
-                    return cid, ""
+            with _cv_download_guard:
+                if cand.id in _cv_download_inflight:
+                    active_futures[cand.id] = _cv_download_inflight[cand.id]
+                    continue
+                first_url = cand.cvs[0]
+                cand_name = cand.name or "Unknown Candidate"
+                future = _cv_download_pool.submit(_do_download_cv, cand.id, first_url, cand_name, token)
+                _cv_download_inflight[cand.id] = future
+                active_futures[cand.id] = future
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                for cid, text in executor.map(_download_task, to_download):
-                    if text:
-                        cv_texts_map[cid] = text
+        # Await all CV downloads for this batch
+        for cid, fut in active_futures.items():
+            try:
+                _, text = fut.result(timeout=45)
+                if text:
+                    cv_texts_map[cid] = text
+            except Exception as e:
+                logger.warning(f"Error resolving CV download for {cid}: {e}")
+
+    def _process_item(cand: CandidatePayload) -> Tuple[Optional[Dict[str, Any]], bool]:
+        try:
+            prefetched = cv_texts_map.get(cand.id)
+            saved, is_new = process_single_candidate(cand, token, prefetched_cv_text=prefetched)
+            return saved, is_new
+        except Exception as e:
+            logger.error(f"Error processing candidate {cand.id}: {e}")
+            return None, False
 
     processed = []
     new_count = 0
     updated_count = 0
-    for cand in candidates:
-        try:
-            prefetched = cv_texts_map.get(cand.id)
-            saved, is_new = process_single_candidate(cand, token, prefetched_cv_text=prefetched)
-            processed.append(saved["id"])
-            if is_new:
-                new_count += 1
-            else:
-                updated_count += 1
-        except Exception as e:
-            logger.error(f"Error processing candidate {cand.id}: {e}")
+
+    # Process candidates concurrently with a bounded pool to avoid request timeouts
+    workers = min(4, len(candidates) or 1)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        for saved, is_new in pool.map(_process_item, candidates):
+            if saved and "id" in saved:
+                processed.append(saved["id"])
+                if is_new:
+                    new_count += 1
+                else:
+                    updated_count += 1
 
     return {
         "success": True,
@@ -536,10 +635,11 @@ def search_candidates(
 
     # Rank candidates against search prompt
     query_text = q.strip().lower()
+    tax_mgr = get_taxonomy_manager()
+    query_skills = tax_mgr.extract_skills(query_text)
     model = get_semantic_model()
     is_dense = model.fastembed_model is not None
     q_vec = model.get_embedding(query_text)
-    query_skills = extract_skills(query_text)
 
     # Fetch candidates with embeddings in a single query to eliminate N+1 overhead
     cands_with_emb = get_all_candidates_with_embeddings()
@@ -606,30 +706,29 @@ def clear_database():
 
 @app.get("/api/models")
 def get_models():
-    """Returns pre-selected local models list and current active model."""
+    """Returns read-only backend model information."""
     model = get_semantic_model()
+    llm_extractor = get_llm_extractor()
+    llm_runtime = llm_extractor.get_runtime_info()
     return {
-        "models": AVAILABLE_MODELS,
-        "active_model": model.model_name,
-        "is_loaded": model.fastembed_model is not None
-    }
-
-
-@app.post("/api/models/select")
-def select_model(payload: SelectModelPayload):
-    """Switches the active local semantic embedding model. Optionally clears DB to prevent dimension mismatches."""
-    if payload.clear_database:
-        clear_all_data()
-        logger.info("Database cleared during model switch to prevent dimension mismatch.")
-
-    model = get_semantic_model()
-    success = model.switch_model(payload.model_name)
-    logger.info(f"Switched model to '{payload.model_name}' (Loaded: {success}).")
-    return {
-        "success": success,
-        "active_model": model.model_name,
-        "is_loaded": model.fastembed_model is not None,
-        "database_cleared": payload.clear_database
+        "llm": {
+            "enabled": llm_extractor.is_enabled(),
+            "model": LLM_MODEL,
+            "runtime": llm_runtime,
+        },
+        "fastembed": {
+            "models": [
+                {
+                    "id": SEMANTIC_MODEL_ID,
+                    "name": "BGE Large EN v1.5",
+                    "dim": SEMANTIC_MODEL_DIM,
+                    "size": "~1.20 GB",
+                }
+            ],
+            "active_model": model.model_name,
+            "is_loaded": model.fastembed_model is not None,
+            "fallback": "Resilient Subword Vectorizer" if model.fastembed_model is None else None,
+        }
     }
 
 

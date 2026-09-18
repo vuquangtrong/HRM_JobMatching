@@ -70,15 +70,9 @@ This extension acts as the client-side data extractor and interactive recruitmen
       - `Matching Percentage` (progress bar + percentage)
   - **Settings**:
     - **Backend Service URL**: Configure backend endpoint (default: `http://localhost:8765`) and test connection health.
-    - **Local AI Semantic Model Selection**: Switch between pre-configured Base and Large local ONNX models:
-      - `BAAI/bge-large-en-v1.5` (**Default - Recommended for Maximum Accuracy**, 1024-dim)
-      - `BAAI/bge-base-en-v1.5` (High Accuracy Base, 768-dim)
-      - `mixedbread-ai/mxbai-embed-large-v1` (SOTA English Large, 1024-dim)
-      - `thenlper/gte-large` (General Text Embeddings Large, 1024-dim)
-      - `thenlper/gte-base` (General Text Embeddings Base, 768-dim)
-      - `snowflake/snowflake-arctic-embed-m` (Snowflake Arctic Base, 768-dim)
-      - `snowflake/snowflake-arctic-embed-l` (Snowflake Arctic Large, 1024-dim)
-      - `jinaai/jina-embeddings-v2-base-en` (Long Context 8K Base, 768-dim)
+    - **Backend AI Model Info (Read-only)**:
+      - LLM extraction model currently configured on backend (for example `qwen2.5:3b`)
+      - FastEmbed local semantic model status and active fixed model (`BAAI/bge-large-en-v1.5`)
     - **Database Management**: One-click confirmation to clear all stored database records (`/api/database/clear`).
 
 ---
