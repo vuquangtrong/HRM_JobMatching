@@ -60,7 +60,7 @@ The extraction model is configured in `config.json` (`llm.model`), defaulting to
 - **Multi-Job Applications**: Candidates can apply to multiple jobs. Applications are persisted in SQLite in the `candidate_applications` table.
 - **Automatic Status Inheritance**: When candidates are ingested from HRM (which returns `jobRequests` for each candidate), the candidate is automatically linked to the applied job, inheriting the candidate's recruitment status (e.g. `PM_ROUND`, `INTERVIEW`, `OFFER`).
 - **Dynamic Application Endpoint (`POST /api/candidates/{candidate_id}/apply`)**: Allows applying a candidate to a new job on-the-fly from the extension matching views. If no status is specified in the request body, it automatically inherits the candidate's current recruitment status.
-- **Bi-directional Application State**: Matching endpoints (`/api/jobs/{job_id}/candidates` and `/api/candidates/{candidate_id}/jobs`) return `applied_jobs`, `is_applied`, and `application_status` fields, enabling real-time status badges and `Apply` button states.
+- **Bi-directional Application State**: Matching endpoints (`/api/jobs/{job_id}/candidates` and `/api/candidates/{candidate_id}/jobs`) return `applied_jobs`, `is_applied`, and `application_status` fields, enabling real-time status badges and `Review`/`Applied` button states.
 
 ### Configuration File (`config.json`)
 
@@ -184,6 +184,7 @@ Execute both suites (backend + LLM extraction with a simulated LLM server):
 | `POST` | `/api/candidates` | `force_recalculate: bool = False` | Ingest single candidate (records `applied_job` application if provided) |
 | `POST` | `/api/candidates/batch` | None | Batch ingest candidates with token (records application for `jobRequestId` with inherited candidate status; recalculates matching ONLY for new candidates) |
 | `GET` | `/api/candidates` | `q: Optional[str]`, `min_score: float = 20.0` | Search candidates via prompt with `query_relevance` score badge or list all (includes `applied_jobs`) |
+| `GET` | `/api/candidates/{candidate_id}` | None | Get a single candidate with full extracted CV information (keywords, experiences, level, CV text) for the review page |
 | `GET` | `/api/candidates/{candidate_id}/jobs` | `limit: int = 100` | Get pre-calculated matching jobs for candidate with `matching_percentage`, `is_applied`, and `application_status` |
 | `POST` | `/api/candidates/{candidate_id}/apply` | Body: `{"job_id": "...", "status": "..."}` | Apply candidate to a job; inherits current candidate status if `status` is omitted |
 | `GET` | `/api/models` | None | Read-only backend model info (LLM model + FastEmbed fixed model status) |

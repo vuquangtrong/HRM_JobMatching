@@ -923,6 +923,52 @@ class TestHRMBackend(unittest.TestCase):
             if j["id"] in ("api-job-1", "api-job-2"):
                 self.assertTrue(j.get("is_applied"))
 
+    def test_get_single_candidate_details_api(self):
+        """Test GET /api/candidates/{candidate_id} used by the review page."""
+        from fastapi.testclient import TestClient
+        import app as backend_app
+
+        client = TestClient(backend_app.app)
+
+        cand_payload = {
+            "jobRequestId": "review-job-1",
+            "candidates": [
+                {
+                    "id": "cand-review-1",
+                    "name": "Nguyen Van Review",
+                    "code": "C99999",
+                    "position": "Tester",
+                    "location": "Ha Noi",
+                    "status": "INTERVIEW",
+                    "cvs": ["https://hrm.ltsgroup.tech/api/cvs/review.pdf"],
+                    "applied_job": {
+                        "id": "review-job-1",
+                        "title": "Review Job",
+                        "code": "REV-01",
+                        "status": "INTERVIEW"
+                    }
+                }
+            ]
+        }
+        res_batch = client.post("/api/candidates/batch", json=cand_payload)
+        self.assertEqual(res_batch.status_code, 200)
+
+        # Full candidate detail must include extracted CV info and applied jobs.
+        res = client.get("/api/candidates/cand-review-1")
+        self.assertEqual(res.status_code, 200)
+        detail = res.json()
+        self.assertEqual(detail["id"], "cand-review-1")
+        self.assertEqual(detail["name"], "Nguyen Van Review")
+        self.assertIn("extracted_keywords", detail)
+        self.assertIn("extracted_experiences", detail)
+        self.assertIsInstance(detail["extracted_experiences"], dict)
+        self.assertEqual(len(detail["applied_jobs"]), 1)
+        self.assertEqual(detail["applied_jobs"][0]["job_id"], "review-job-1")
+
+        # Unknown candidate returns 404.
+        missing = client.get("/api/candidates/does-not-exist")
+        self.assertEqual(missing.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

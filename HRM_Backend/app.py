@@ -766,6 +766,18 @@ def search_candidates(
     return scored_cands
 
 
+@app.get("/api/candidates/{candidate_id}")
+def get_candidate_details(candidate_id: str):
+    """
+    Retrieves a single candidate with full extracted CV information
+    (keywords, experiences, level, cv text) for the review page.
+    """
+    cand = get_candidate_by_id(candidate_id)
+    if not cand:
+        raise HTTPException(status_code=404, detail=f"Candidate '{candidate_id}' not found")
+    return cand
+
+
 @app.get("/api/candidates/{candidate_id}/jobs")
 def get_candidate_matching_jobs(candidate_id: str, limit: int = Query(100, ge=1, le=200)):
     """

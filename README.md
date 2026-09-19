@@ -66,8 +66,14 @@ Recruitment candidates are not tied to a single position; they can apply to mult
    - The `Applied Jobs` column renders distinct status badges for every job the candidate has applied for.
 
 3. **In-Drawer Job Applications**:
-   - **Job Matching Candidates Table**: Includes an **`Action`** column with an **`Apply`** button. Clicking it calls `POST /api/candidates/{candidate_id}/apply` to apply the candidate to the active job, inheriting their current candidate status.
-   - **Search Candidates Table & Matching Jobs List**: The selected candidate's matching jobs list includes an **`Action`** column placed next to **`Matching %`** with an **`Apply`** button, allowing recruiters to immediately assign candidate profiles to matching positions.
+   - **Job Matching Candidates Table**: Includes an **`Action`** column. When the candidate is not applied yet, a **`Review`** button opens the **Candidate Review Page**; once assigned it switches to a disabled `Applied` state.
+   - **Search Candidates Table & Matching Jobs List**: The selected candidate's matching jobs list includes an **`Action`** column placed next to **`Matching %`** with the same **`Review`** button, allowing recruiters to inspect a candidate against a matching position before assigning.
+   - **Candidate Review Page**: A focused four-frame workspace (auto-expanded to full page):
+     - *Top-left*: Job details (title, code, level, request, description, extracted skills).
+     - *Bottom-left*: Extracted information from the candidate CV (contact, level, experience, summary, skills, matched experience).
+     - *Top-right*: The candidate's actual CV rendered as an embedded PDF.
+     - *Bottom-right*: Reviewer's comment box.
+     - *Footer*: The **`Assign`** button performs the actual link via `POST /api/candidates/{candidate_id}/apply`.
    - Buttons dynamically switch to a disabled `Applied` state once assigned.
 
 ---

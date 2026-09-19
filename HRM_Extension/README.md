@@ -65,7 +65,7 @@ This extension acts as the client-side data extractor and interactive recruitmen
       - `Applied Jobs` (shows all jobs the candidate has applied to with individual status badges, replacing standalone status column)
       - `Matched Experience`
       - `Matching %` (progress bar + percentage)
-      - `Action` (`Apply` button to link candidate to the selected job with inherited status, or disabled `Applied` badge if already applied)
+      - `Action` (`Review` button opening the Candidate Review Page, or disabled `Applied` badge if already applied)
   - **Search Candidates (with Match Score Badges & Multi-Job Application)**:
     - Free-text query prompt to search candidates across all saved records.
     - Candidate search table columns:
@@ -77,7 +77,15 @@ This extension acts as the client-side data extractor and interactive recruitmen
       - `Job Title` & `Code`
       - `Matched Requests`
       - `Matching %` (progress bar + percentage)
-      - `Action` (`Apply` button placed next to `Matching %` to apply candidate directly to matching job, or disabled `Applied` badge)
+      - `Action` (`Review` button placed next to `Matching %` to inspect the candidate against the matching job, or disabled `Applied` badge)
+  - **Candidate Review Page (Pre-Assignment Inspection)**:
+    - Triggered by any `Review` button; automatically expands the drawer to full page.
+    - Four-frame layout:
+      - **Job Details** (top-left, 50% height): title, code, level, request, full description and extracted job skills.
+      - **Extracted CV Information** (bottom-left, 50% height): candidate contact details, level, years of experience, AI summary, extracted skills and matched experience.
+      - **Candidate CV** (top-right, 90% height): authenticated fetch of the CV PDF rendered inline via an embedded viewer.
+      - **Reviewer Comment** (bottom-right, 10% height): free-text notes preserved while the page is open.
+    - **Assign Button** (footer): calls `POST /api/candidates/{candidate_id}/apply` to actually link the candidate to the job, then returns to the underlying table with the `Applied` state.
   - **Settings**:
     - **Backend Service URL**: Configure backend endpoint (default: `http://localhost:8765`) and test connection health.
     - **Backend AI Model Info (Read-only)**:

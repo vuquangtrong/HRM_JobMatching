@@ -122,6 +122,14 @@
   let selectedCandidateJobs = [];
   let isLoadingCandidateJobs = false;
 
+  // Candidate Review Page state
+  let reviewContext = null; // { candId, jobId, candidate, job, source, fullCandidate }
+  let reviewAssigning = false;
+  let reviewError = null;
+  let reviewWasFullPage = false;
+  let reviewCvObjectUrl = null;
+  let reviewCvLoadedUrl = null;
+
 
   // Settings view state
   let backendModelInfo = null;
@@ -447,7 +455,7 @@
           const isApplied = Boolean(c.is_applied || (Array.isArray(c.applied_jobs) && c.applied_jobs.some(j => j.job_id === selectedJob.id)));
           const actionBtn = isApplied
             ? `<button class="hrm-ext-sm-btn hrm-ext-btn-applied" disabled type="button">Applied</button>`
-            : `<button class="hrm-ext-sm-btn hrm-ext-btn-primary apply-candidate-btn" data-cand-id="${escapeHtml(c.id)}" data-job-id="${escapeHtml(selectedJob.id)}" type="button">Apply</button>`;
+            : `<button class="hrm-ext-sm-btn hrm-ext-btn-primary review-candidate-btn" data-cand-id="${escapeHtml(c.id)}" data-job-id="${escapeHtml(selectedJob.id)}" type="button">Review</button>`;
 
           rowsHtml += `
             <tr>
@@ -582,7 +590,7 @@
           const isApplied = Boolean(j.is_applied || (Array.isArray(selectedCandidate.applied_jobs) && selectedCandidate.applied_jobs.some(app => app.job_id === j.id)));
           const actionBtn = isApplied
             ? `<button class="hrm-ext-sm-btn hrm-ext-btn-applied" disabled type="button">Applied</button>`
-            : `<button class="hrm-ext-sm-btn hrm-ext-btn-primary apply-candidate-btn" data-cand-id="${escapeHtml(selectedCandidate.id)}" data-job-id="${escapeHtml(j.id)}" type="button">Apply</button>`;
+            : `<button class="hrm-ext-sm-btn hrm-ext-btn-primary review-candidate-btn" data-cand-id="${escapeHtml(selectedCandidate.id)}" data-job-id="${escapeHtml(j.id)}" type="button">Review</button>`;
 
           rowsHtml += `
             <tr>
@@ -814,6 +822,304 @@
   }
 
   /**
+   * Render the Candidate Review Page with 4 frames:
+   *  - top left:    job details (50% height)
+   *  - bottom left: extracted info from candidate CV (50% height)
+   *  - top right:   embedded candidate CV PDF (90% height)
+   *  - bottom right: reviewer's comment (10% height)
+   * Footer holds the Assign button that actually links candidate to job.
+   */
+  function renderReviewView() {
+    const ctx = reviewContext;
+    if (!ctx) return '';
+
+    const job = ctx.job || {};
+    const cand = ctx.candidate || {};
+    const full = ctx.fullCandidate || {};
+
+    const candName = cand.name || full.name || 'Candidate';
+    const candStatus = cand.status || full.status || 'OPEN';
+    const matchPct = (cand.matching_percentage ?? job.matching_percentage);
+    const extractedSkills = (Array.isArray(full.extracted_keywords) && full.extracted_keywords.length)
+      ? full.extracted_keywords
+      : (Array.isArray(cand.matched_skills) ? cand.matched_skills : []);
+    const exp = full.extracted_experiences || {};
+    const cvUrl = (Array.isArray(cand.cv_urls) && cand.cv_urls.length) ? cand.cv_urls[0] : (Array.isArray(full.cv_urls) && full.cv_urls.length ? full.cv_urls[0] : '');
+
+    const jobKeywords = (Array.isArray(job.extracted_keywords) && job.extracted_keywords.length)
+      ? job.extracted_keywords.map(s => `<span class="hrm-ext-skill-tag">${escapeHtml(s)}</span>`).join(' ')
+      : '';
+
+    const skillsHtml = extractedSkills.length
+      ? `<div class="hrm-ext-mt-6">${extractedSkills.slice(0, 20).map(s => `<span class="hrm-ext-skill-tag">${escapeHtml(s)}</span>`).join(' ')}</div>`
+      : '<div class="hrm-ext-help-text hrm-ext-mt-6">No skills extracted yet.</div>';
+
+    const matchedExpText = cand.matched_experience || job.matched_experience || '';
+    const matchedRequestsText = cand.matched_requests || job.matched_requests || '';
+    const jobDescriptionText = job.job_description || '';
+
+    const matchPctHtml = (matchPct !== undefined && matchPct !== null)
+      ? `<span class="hrm-ext-badge status-purple" title="Matching percentage">${Number(matchPct).toFixed(1)}% match</span>`
+      : '';
+
+    const footerNote = reviewError
+      ? `<span class="hrm-ext-review-footer-note">Assign failed: ${escapeHtml(reviewError)}</span>`
+      : '<span class="hrm-ext-review-footer-note"></span>';
+
+    return `
+      <div class="hrm-ext-review-page">
+        <div class="hrm-ext-row-between hrm-ext-review-header">
+          <div class="hrm-ext-row-start">
+            <button class="hrm-ext-sm-btn hrm-ext-review-back-btn" type="button">‹ Back</button>
+            <span class="hrm-ext-title-md">Review Candidate</span>
+          </div>
+          <div class="hrm-ext-inline-wrap">
+            <span class="hrm-ext-title-strong">${escapeHtml(candName)}</span>
+            ${renderStatusBadge(candStatus)}
+            ${matchPctHtml}
+          </div>
+        </div>
+
+        <div class="hrm-ext-review-body">
+          <div class="hrm-ext-review-col">
+            <div class="hrm-ext-review-panel hrm-ext-review-panel-top">
+              <div class="hrm-ext-review-panel-label">Job Details</div>
+              <div class="hrm-ext-review-scroll">
+                <div class="hrm-ext-title-strong">${escapeHtml(job.title || 'Untitled Job')}</div>
+                <div class="hrm-ext-meta-line">${escapeHtml(job.code || '')}${job.level ? ` • ${escapeHtml(job.level)}` : ''}</div>
+                ${job.request ? `<div class="hrm-ext-preline hrm-ext-mt-6 hrm-ext-body-note">${escapeHtml(job.request)}</div>` : ''}
+                ${jobDescriptionText ? `<div class="hrm-ext-preline hrm-ext-mt-6 hrm-ext-help-text">${escapeHtml(stripHtml(jobDescriptionText))}</div>` : ''}
+                ${jobKeywords ? `<div class="hrm-ext-mt-6">${jobKeywords}</div>` : ''}
+                ${matchedRequestsText ? `<div class="hrm-ext-panel-soft hrm-ext-panel-soft-compact hrm-ext-mt-6"><div class="hrm-ext-section-label">WHY THIS CANDIDATE MATCHES</div><div class="hrm-ext-mt-4 hrm-ext-body-note">${escapeHtml(matchedRequestsText)}</div></div>` : ''}
+              </div>
+            </div>
+
+            <div class="hrm-ext-review-panel hrm-ext-review-panel-bottom">
+              <div class="hrm-ext-review-panel-label">Extracted CV Information</div>
+              <div class="hrm-ext-review-scroll">
+                <div class="hrm-ext-title-strong">${escapeHtml(candName)}</div>
+                <div class="hrm-ext-meta-line">
+                  ${escapeHtml(full.position || cand.position || '')}${full.position || cand.position ? ' • ' : ''}${escapeHtml(full.location || cand.location || '')}${full.location || cand.location ? ' • ' : ''}${escapeHtml(full.code || cand.code || '')}
+                  ${full.extracted_level || cand.level ? ` • ${escapeHtml(full.extracted_level || cand.level)}` : ''}
+                </div>
+                ${(exp.years_experience !== undefined && exp.years_experience !== null && exp.years_experience !== '')
+                  ? `<div class="hrm-ext-mt-6 hrm-ext-row-start"><span class="hrm-ext-section-label">Experience:</span><span class="hrm-ext-body-note">${escapeHtml(String(exp.years_experience))}</span></div>`
+                  : ''}
+                ${exp.summary ? `<div class="hrm-ext-mt-6 hrm-ext-body-note">${escapeHtml(exp.summary)}</div>` : ''}
+                ${skillsHtml}
+                ${matchedExpText ? `<div class="hrm-ext-panel-soft hrm-ext-panel-soft-compact hrm-ext-mt-6"><div class="hrm-ext-section-label">MATCHED EXPERIENCE</div><div class="hrm-ext-mt-4 hrm-ext-body-note">${escapeHtml(matchedExpText)}</div></div>` : ''}
+              </div>
+            </div>
+          </div>
+
+          <div class="hrm-ext-review-col">
+            <div class="hrm-ext-review-panel hrm-ext-review-cv">
+              <div class="hrm-ext-review-panel-label">Candidate CV</div>
+              <div class="hrm-ext-review-cv-body" id="hrm-ext-review-cv-frame"></div>
+            </div>
+            <div class="hrm-ext-review-panel hrm-ext-review-comment">
+              <div class="hrm-ext-review-panel-label">Reviewer Comment</div>
+              <textarea class="hrm-ext-review-comment-input" id="hrm-ext-review-comment-input" placeholder="Add notes before assigning...">${escapeHtml(ctx.comment || '')}</textarea>
+            </div>
+          </div>
+        </div>
+
+        <div class="hrm-ext-review-footer">
+          ${footerNote}
+          <button class="hrm-ext-btn-primary" type="button" id="hrm-ext-assign-btn"
+            data-cand-id="${escapeHtml(ctx.candId)}" data-job-id="${escapeHtml(ctx.jobId)}"
+            ${reviewAssigning ? 'disabled' : ''}>${reviewAssigning ? 'Assigning...' : 'Assign to Job'}</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function stripHtml(html) {
+    const div = document.createElement('div');
+    div.innerHTML = html || '';
+    return div.textContent || '';
+  }
+
+  function closeReview() {
+    if (reviewCvObjectUrl) {
+      URL.revokeObjectURL(reviewCvObjectUrl);
+      reviewCvObjectUrl = null;
+    }
+    reviewCvLoadedUrl = null;
+    const wasFullPage = reviewWasFullPage;
+    reviewContext = null;
+    reviewAssigning = false;
+    reviewError = null;
+    toggleDrawerFullPage(wasFullPage);
+    updateDrawerContent();
+  }
+
+  function openReview(cand, job, source) {
+    reviewWasFullPage = drawerEl.classList.contains('full-page');
+    toggleDrawerFullPage(true);
+    reviewContext = {
+      candId: cand.id,
+      jobId: job.id,
+      candidate: cand,
+      job: job,
+      source: source || 'job',
+      fullCandidate: null
+    };
+    reviewAssigning = false;
+    reviewError = null;
+    updateDrawerContent();
+    loadReviewDetails();
+  }
+
+  async function loadReviewDetails() {
+    const ctx = reviewContext;
+    if (!ctx) return;
+
+    try {
+      const [jobRes, candRes] = await Promise.all([
+        fetch(`${getBackendUrl()}/api/jobs/${encodeURIComponent(ctx.jobId)}`),
+        fetch(`${getBackendUrl()}/api/candidates/${encodeURIComponent(ctx.candId)}`)
+      ]);
+      const jobData = jobRes.ok ? await jobRes.json() : null;
+      const candData = candRes.ok ? await candRes.json() : null;
+      if (!reviewContext) return;
+      reviewContext = {
+        ...reviewContext,
+        job: jobData || ctx.job,
+        fullCandidate: candData || ctx.fullCandidate
+      };
+      updateDrawerContent();
+    } catch (e) {
+      console.warn('[HRM Extension] Failed to load review details:', e);
+    }
+  }
+
+  async function loadReviewCv(container) {
+    const frame = container.querySelector('#hrm-ext-review-cv-frame');
+    if (!frame || frame.dataset.loading === '1') return;
+
+    const cvUrl = (reviewContext?.candidate?.cv_urls && reviewContext.candidate.cv_urls[0])
+      || (reviewContext?.fullCandidate?.cv_urls && reviewContext.fullCandidate.cv_urls[0]);
+    if (!cvUrl) {
+      frame.innerHTML = '<div class="hrm-ext-review-cv-note">No CV document available for this candidate.</div>';
+      return;
+    }
+
+    // Re-embed already-fetched blob without refetching when re-rendering the same CV.
+    if (reviewCvObjectUrl && reviewCvLoadedUrl === cvUrl) {
+      if (!frame.querySelector('embed')) {
+        const embed = document.createElement('embed');
+        embed.type = 'application/pdf';
+        embed.src = reviewCvObjectUrl;
+        embed.className = 'hrm-ext-review-cv-embed';
+        frame.innerHTML = '';
+        frame.appendChild(embed);
+      }
+      return;
+    }
+
+    if (reviewCvObjectUrl) {
+      URL.revokeObjectURL(reviewCvObjectUrl);
+      reviewCvObjectUrl = null;
+      reviewCvLoadedUrl = null;
+    }
+
+    frame.dataset.loading = '1';
+    frame.innerHTML = '<div class="hrm-ext-review-cv-note hrm-ext-state-loading">Loading CV document...</div>';
+
+    try {
+      const token = getAccessToken();
+      const headers = { 'Accept': 'application/pdf,*/*' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await fetch(cvUrl, { headers, credentials: 'include' });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      reviewCvObjectUrl = url;
+      reviewCvLoadedUrl = cvUrl;
+
+      const embed = document.createElement('embed');
+      embed.type = 'application/pdf';
+      embed.src = url;
+      embed.className = 'hrm-ext-review-cv-embed';
+
+      frame.innerHTML = '';
+      frame.appendChild(embed);
+    } catch (e) {
+      console.warn('[HRM Extension] Failed to load candidate CV:', e);
+      frame.innerHTML = `<div class="hrm-ext-review-cv-note">Unable to load CV: ${escapeHtml(e.message)}. <a href="${escapeHtml(cvUrl)}" target="_blank" rel="noopener noreferrer" class="hrm-ext-cv-link">Open in new tab</a></div>`;
+    } finally {
+      delete frame.dataset.loading;
+    }
+  }
+
+  async function applyCandidateToJob(candId, jobId) {
+    const res = await fetch(`${getBackendUrl()}/api/candidates/${encodeURIComponent(candId)}/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: jobId })
+    });
+
+    if (!res.ok) {
+      throw new Error(`Failed to apply (HTTP ${res.status})`);
+    }
+
+    const data = await res.json();
+
+    // 1. Update matching candidate in local selectedJobCandidates (if on selected job view)
+    const cand = selectedJobCandidates.find(c => c.id === candId);
+    if (cand) {
+      cand.is_applied = true;
+      cand.applied_jobs = data.applied_jobs || [];
+    }
+
+    // 2. Update matching job in local selectedCandidateJobs (if on selected candidate view)
+    const candJob = selectedCandidateJobs.find(j => j.id === jobId);
+    if (candJob) {
+      candJob.is_applied = true;
+    }
+    if (selectedCandidate && selectedCandidate.id === candId) {
+      selectedCandidate.applied_jobs = data.applied_jobs || [];
+    }
+
+    // 3. Also update candidate in search results if present
+    const searchCand = candidateSearchResults.find(c => c.id === candId);
+    if (searchCand) {
+      searchCand.applied_jobs = data.applied_jobs || [];
+    }
+
+    return data;
+  }
+
+  async function assignCandidateFromReview(btn) {
+    if (reviewAssigning) return;
+    const candId = btn.dataset.candId;
+    const jobId = btn.dataset.jobId;
+    if (!candId || !jobId) return;
+
+    reviewAssigning = true;
+    reviewError = null;
+    updateDrawerContent();
+
+    try {
+      await applyCandidateToJob(candId, jobId);
+      reviewAssigning = false;
+      const wasFullPage = reviewWasFullPage;
+      reviewContext = null;
+      reviewError = null;
+      toggleDrawerFullPage(wasFullPage);
+      updateDrawerContent();
+    } catch (err) {
+      console.error('[HRM Extension] Assign error:', err);
+      reviewAssigning = false;
+      reviewError = err.message;
+      updateDrawerContent();
+    }
+  }
+
+  /**
    * Update drawer content based on selected mainPage
    */
   function updateDrawerContent() {
@@ -832,18 +1138,24 @@
 
     const bodyEl = drawerEl.querySelector('.hrm-ext-body');
     if (bodyEl) {
-      bodyEl.innerHTML = `
-        <!-- Main Navigation Bar -->
-        <div class="hrm-ext-main-nav">
-          <button class="hrm-ext-nav-btn ${mainPage === 'jobs' ? 'active' : ''}" type="button" data-nav="jobs">All Jobs</button>
-          <button class="hrm-ext-nav-btn ${mainPage === 'search' ? 'active' : ''}" type="button" data-nav="search">Search Candidates</button>
-          <button class="hrm-ext-nav-btn ${mainPage === 'settings' ? 'active' : ''}" type="button" data-nav="settings">Settings</button>
-        </div>
-        <div class="hrm-ext-page-container">${pageContent}</div>
-      `;
+      if (reviewContext) {
+        bodyEl.innerHTML = renderReviewView();
+        applyMatchProgressWidths(bodyEl);
+        bindDrawerEvents(bodyEl);
+      } else {
+        bodyEl.innerHTML = `
+          <!-- Main Navigation Bar -->
+          <div class="hrm-ext-main-nav">
+            <button class="hrm-ext-nav-btn ${mainPage === 'jobs' ? 'active' : ''}" type="button" data-nav="jobs">All Jobs</button>
+            <button class="hrm-ext-nav-btn ${mainPage === 'search' ? 'active' : ''}" type="button" data-nav="search">Search Candidates</button>
+            <button class="hrm-ext-nav-btn ${mainPage === 'settings' ? 'active' : ''}" type="button" data-nav="settings">Settings</button>
+          </div>
+          <div class="hrm-ext-page-container">${pageContent}</div>
+        `;
 
-      applyMatchProgressWidths(bodyEl);
-      bindDrawerEvents(bodyEl);
+        applyMatchProgressWidths(bodyEl);
+        bindDrawerEvents(bodyEl);
+      }
     }
     updateHeaderSyncStatus();
   }
@@ -852,6 +1164,35 @@
    * Bind event listeners for drawer views
    */
   function bindDrawerEvents(container) {
+    // 0. Candidate Review Page events
+    const reviewBackBtn = container.querySelector('.hrm-ext-review-back-btn');
+    if (reviewBackBtn) {
+      reviewBackBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeReview();
+      });
+    }
+
+    const assignBtn = container.querySelector('#hrm-ext-assign-btn');
+    if (assignBtn) {
+      assignBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        assignCandidateFromReview(assignBtn);
+      });
+    }
+
+    const reviewCommentInput = container.querySelector('#hrm-ext-review-comment-input');
+    if (reviewCommentInput) {
+      reviewCommentInput.addEventListener('input', (e) => {
+        e.stopPropagation();
+        if (reviewContext) reviewContext.comment = reviewCommentInput.value;
+      });
+    }
+
+    if (container.querySelector('#hrm-ext-review-cv-frame')) {
+      loadReviewCv(container);
+    }
+
     // 1. Navigation buttons
     const navBtns = container.querySelectorAll('.hrm-ext-nav-btn');
     navBtns.forEach((btn) => {
@@ -925,58 +1266,49 @@
       });
     }
 
-    const applyCandidateBtns = container.querySelectorAll('.apply-candidate-btn');
-    applyCandidateBtns.forEach((btn) => {
-      btn.addEventListener('click', async (e) => {
+    const reviewCandidateBtns = container.querySelectorAll('.review-candidate-btn');
+    reviewCandidateBtns.forEach((btn) => {
+      btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const candId = btn.dataset.candId;
         const jobId = btn.dataset.jobId;
         if (!candId || !jobId) return;
 
-        btn.disabled = true;
-        btn.textContent = 'Applying...';
+        let cand = null;
+        let job = null;
+        let source = 'job';
 
-        try {
-          const res = await fetch(`${getBackendUrl()}/api/candidates/${encodeURIComponent(candId)}/apply`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ job_id: jobId })
-          });
+        // Candidate-search flow: reviewing a matching job for the selected candidate.
+        if (selectedCandidate && selectedCandidate.id === candId) {
+          cand = selectedCandidate;
+          job = selectedCandidateJobs.find(j => j.id === jobId) || null;
+          source = 'candidate';
+        }
 
-          if (!res.ok) {
-            throw new Error(`Failed to apply (HTTP ${res.status})`);
-          }
+        // Jobs flow: reviewing a matching candidate for the selected job.
+        if (!cand && selectedJob && selectedJob.id === jobId) {
+          cand = selectedJobCandidates.find(c => c.id === candId) || null;
+          job = selectedJob;
+          source = 'job';
+        }
 
-          const data = await res.json();
+        // Fallbacks using locally cached records.
+        if (!cand) {
+          cand = selectedJobCandidates.find(c => c.id === candId)
+            || candidateSearchResults.find(c => c.id === candId)
+            || null;
+        }
+        if (!job) {
+          job = selectedCandidateJobs.find(j => j.id === jobId)
+            || selectedJob
+            || backendJobs.find(j => j.id === jobId)
+            || null;
+        }
 
-          // 1. Update matching candidate in local selectedJobCandidates (if on selected job view)
-          const cand = selectedJobCandidates.find(c => c.id === candId);
-          if (cand) {
-            cand.is_applied = true;
-            cand.applied_jobs = data.applied_jobs || [];
-          }
-
-          // 2. Update matching job in local selectedCandidateJobs (if on selected candidate view)
-          const candJob = selectedCandidateJobs.find(j => j.id === jobId);
-          if (candJob) {
-            candJob.is_applied = true;
-          }
-          if (selectedCandidate && selectedCandidate.id === candId) {
-            selectedCandidate.applied_jobs = data.applied_jobs || [];
-          }
-
-          // 3. Also update candidate in search results if present
-          const searchCand = candidateSearchResults.find(c => c.id === candId);
-          if (searchCand) {
-            searchCand.applied_jobs = data.applied_jobs || [];
-          }
-
-          updateDrawerContent();
-        } catch (err) {
-          console.error('[HRM Extension] Apply error:', err);
-          alert(`Error applying candidate to job: ${err.message}`);
-          btn.disabled = false;
-          btn.textContent = 'Apply';
+        if (cand && job) {
+          openReview(cand, job, source);
+        } else {
+          console.warn('[HRM Extension] Could not resolve review context for candidate', candId, 'job', jobId);
         }
       });
     });
@@ -1251,7 +1583,7 @@
 
     floatingRoot.innerHTML = `
       <div id="hrm-ext-tooltip">HRM Extension: Idle (Navigate to a Job Request)</div>
-      <button id="hrm-ext-floating-btn" type="button" aria-label="HRM Extension" title="Open HRM Assistant">
+      <button id="hrm-ext-floating-btn" type="button" aria-label="HRM Extension" title="Open HRM Recruitment Assistant">
         <img src="${iconUrl}" alt="HRM" />
         <span id="hrm-ext-status-dot" class="idle"></span>
         <span id="hrm-ext-badge-count"></span>
@@ -1259,7 +1591,7 @@
       <div id="hrm-ext-drawer">
         <div class="hrm-ext-header">
           <div class="hrm-ext-title">
-            <span>HRM Assistant</span>
+            <span>HRM Recruitment Assistant</span>
           </div>
           <div class="hrm-ext-header-actions">
             <div id="hrm-ext-header-sync-status"></div>
