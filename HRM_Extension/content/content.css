@@ -1289,3 +1289,98 @@
 .hrm-ext-review-cv-download .hrm-ext-cv-link {
   margin-left: 0;
 }
+
+/* ---- Status Tab ---- */
+.hrm-ext-status-loading {
+  padding: 20px 0;
+  text-align: center;
+  color: #888;
+  font-size: 13px;
+}
+
+.hrm-ext-status-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 16px;
+  gap: 6px;
+}
+
+.hrm-ext-status-empty-icon {
+  font-size: 36px;
+  line-height: 1;
+}
+
+.hrm-ext-status-empty-text {
+  font-size: 15px;
+  font-weight: 600;
+  color: #333;
+}
+
+.hrm-ext-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.hrm-ext-status-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hrm-ext-status-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hrm-ext-status-group-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.hrm-ext-status-group-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 4px;
+}
+
+.hrm-ext-task-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #f7f8fa;
+  font-size: 12.5px;
+}
+
+.hrm-ext-task-item-dot {
+  width: 8px;
+  height: 8px;
+  min-width: 8px;
+  border-radius: 50%;
+  background: #aaa;
+}
+
+.hrm-ext-task-item-dot.status-blue   { background: #3b82f6; }
+.hrm-ext-task-item-dot.status-amber  { background: #f59e0b; }
+.hrm-ext-task-item-dot.status-purple { background: #8b5cf6; }
+.hrm-ext-task-item-dot.status-gray   { background: #9ca3af; }
+
+.hrm-ext-task-item-label {
+  flex: 1;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hrm-ext-task-item-elapsed {
+  color: #888;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

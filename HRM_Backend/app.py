@@ -95,15 +95,52 @@ _cv_download_guard = threading.Lock()
 _cv_download_inflight: Dict[str, concurrent.futures.Future] = {}
 
 
+# ---------------------------------------------------------------------------
+# In-progress task tracking for the GET /api/status/tasks endpoint.
+# Provides real-time visibility into long-running backend operations.
+# ---------------------------------------------------------------------------
+_active_tasks_guard = threading.Lock()
+_active_tasks: Dict[str, Dict[str, Any]] = {}
+
+
+def _register_task(task_id: str, task_type: str, label: str) -> None:
+    """Registers a task as in-progress so it appears in /api/status/tasks."""
+    import time as _time
+    with _active_tasks_guard:
+        _active_tasks[task_id] = {
+            "id": task_id,
+            "type": task_type,
+            "label": label,
+            "started_at": _time.time(),
+        }
+
+
+def _unregister_task(task_id: str) -> None:
+    """Removes a completed or failed task from the active registry."""
+    with _active_tasks_guard:
+        _active_tasks.pop(task_id, None)
+
+
+@contextmanager
+def _tracked_task(task_id: str, task_type: str, label: str):
+    """Context manager that tracks a task's lifetime in the active registry."""
+    _register_task(task_id, task_type, label)
+    try:
+        yield
+    finally:
+        _unregister_task(task_id)
+
+
 def _do_download_cv(cid: str, url: str, name: str, token: str) -> Tuple[str, str]:
     """Worker task executing CV download and text extraction."""
-    try:
-        text = download_and_extract_cv(url, token)
-        logger.info(f"Downloaded CV for '{name}' in thread pool ({len(text)} chars)")
-        return cid, text
-    except Exception as e:
-        logger.warning(f"Could not download CV for '{name}' from {url}: {e}")
-        return cid, ""
+    with _tracked_task(f"cv_dl_{cid}", "cv_download", name):
+        try:
+            text = download_and_extract_cv(url, token)
+            logger.info(f"Downloaded CV for '{name}' in thread pool ({len(text)} chars)")
+            return cid, text
+        except Exception as e:
+            logger.warning(f"Could not download CV for '{name}' from {url}: {e}")
+            return cid, ""
 
 
 def _release_cv_download(candidate_id: str) -> None:
@@ -236,22 +273,23 @@ def _ingest_job_locked(
     is_new = existing_job is None
 
     if is_new:
-        # Brand new job: extract keywords and semantic embedding
-        extracted = extract_job_keywords(title, req, desc, raw_level=payload.level or payload.levelCandidate)
-        job_data = {
-            "id": payload.id,
-            "title": title,
-            "code": payload.code or "",
-            "request": req,
-            "job_description": desc,
-            "extracted_keywords": extracted["skills"],
-            "extracted_level": extracted["level"],
-            "embedding": extracted["embedding"],
-            "raw_data": payload.raw_data or payload.model_dump()
-        }
-        saved_job, _ = save_or_update_job(job_data)
-        matches_count = recalculate_for_job(payload.id)
-        logger.info(f"New Job '{title}' (ID: {payload.id}) added. Precalculated matches for {matches_count} candidates.")
+        with _tracked_task(f"job_{payload.id}", "job_process", title):
+            # Brand new job: extract keywords and semantic embedding
+            extracted = extract_job_keywords(title, req, desc, raw_level=payload.level or payload.levelCandidate)
+            job_data = {
+                "id": payload.id,
+                "title": title,
+                "code": payload.code or "",
+                "request": req,
+                "job_description": desc,
+                "extracted_keywords": extracted["skills"],
+                "extracted_level": extracted["level"],
+                "embedding": extracted["embedding"],
+                "raw_data": payload.raw_data or payload.model_dump()
+            }
+            saved_job, _ = save_or_update_job(job_data)
+            matches_count = recalculate_for_job(payload.id)
+            logger.info(f"New Job '{title}' (ID: {payload.id}) added. Precalculated matches for {matches_count} candidates.")
     else:
         # Existing job: update metadata, reuse existing embeddings/keywords to stay fast
         job_data = {
@@ -529,61 +567,63 @@ def _process_single_candidate_locked(
             logger.info(f"Existing candidate '{saved.get('name')}' (ID: {cand_payload.id}) status updated to '{cand_data['status']}'. Skipped matching recalculation.")
             return saved, False
         else:
-            # Brand new candidate: extract keywords, embeddings, save to DB, and recalculate
-            cv_urls = cand_payload.cvs or []
-            cv_text = prefetched_cv_text or ""
+            cand_name = cand_payload.name or "Unknown Candidate"
+            with _tracked_task(f"cv_{cand_payload.id}", "cv_process", cand_name):
+                # Brand new candidate: extract keywords, embeddings, save to DB, and recalculate
+                cv_urls = cand_payload.cvs or []
+                cv_text = prefetched_cv_text or ""
 
-            # Try downloading first CV PDF if token provided and not prefetched
-            if not cv_text and cv_urls and token:
-                first_url = cv_urls[0]
-                try:
-                    cv_text = download_and_extract_cv(first_url, token)
-                    logger.info(f"Successfully downloaded and extracted CV for candidate '{cand_payload.name or 'Unknown Candidate'}'. Data length: {len(cv_text)} characters.")
-                except Exception as e:
-                    logger.warning(f"Could not download CV from {first_url}: {e}")
+                # Try downloading first CV PDF if token provided and not prefetched
+                if not cv_text and cv_urls and token:
+                    first_url = cv_urls[0]
+                    try:
+                        cv_text = download_and_extract_cv(first_url, token)
+                        logger.info(f"Successfully downloaded and extracted CV for candidate '{cand_name}'. Data length: {len(cv_text)} characters.")
+                    except Exception as e:
+                        logger.warning(f"Could not download CV from {first_url}: {e}")
 
-            raw_langs = None
-            if cand_payload.raw_data and isinstance(cand_payload.raw_data, dict):
-                raw_langs = cand_payload.raw_data.get("languages") or (cand_payload.raw_data.get("cv", {}) or {}).get("languages")
+                raw_langs = None
+                if cand_payload.raw_data and isinstance(cand_payload.raw_data, dict):
+                    raw_langs = cand_payload.raw_data.get("languages") or (cand_payload.raw_data.get("cv", {}) or {}).get("languages")
 
-            extracted = extract_candidate_keywords(
-                name=cand_payload.name or "",
-                position=cand_payload.position or "",
-                location=cand_payload.location or "",
-                cv_information=cand_payload.cvInformation,
-                cv_text=cv_text,
-                raw_level=cand_payload.level,
-                raw_experience=cand_payload.experience,
-                cv_urls=cv_urls,
-                raw_languages=raw_langs
-            )
+                extracted = extract_candidate_keywords(
+                    name=cand_name,
+                    position=cand_payload.position or "",
+                    location=cand_payload.location or "",
+                    cv_information=cand_payload.cvInformation,
+                    cv_text=cv_text,
+                    raw_level=cand_payload.level,
+                    raw_experience=cand_payload.experience,
+                    cv_urls=cv_urls,
+                    raw_languages=raw_langs
+                )
 
-            cand_data = {
-                "id": cand_payload.id,
-                "application_id": cand_payload.application_id or "",
-                "code": cand_payload.code or "",
-                "name": cand_payload.name or "Unknown Candidate",
-                "position": cand_payload.position or "",
-                "location": cand_payload.location or "",
-                "status": cand_payload.status or "OPEN",
-                "cv_urls": cv_urls,
-                "cv_text": cv_text,
-                "extracted_keywords": extracted["skills"],
-                "extracted_experiences": {
-                    "years_experience": extracted["years_experience"],
-                    "summary": extracted["summary"]
-                },
-                "extracted_level": extracted["level"],
-                "embedding": extracted["embedding"],
-                "raw_data": cand_payload.raw_data or cand_payload.model_dump()
-            }
+                cand_data = {
+                    "id": cand_payload.id,
+                    "application_id": cand_payload.application_id or "",
+                    "code": cand_payload.code or "",
+                    "name": cand_name,
+                    "position": cand_payload.position or "",
+                    "location": cand_payload.location or "",
+                    "status": cand_payload.status or "OPEN",
+                    "cv_urls": cv_urls,
+                    "cv_text": cv_text,
+                    "extracted_keywords": extracted["skills"],
+                    "extracted_experiences": {
+                        "years_experience": extracted["years_experience"],
+                        "summary": extracted["summary"]
+                    },
+                    "extracted_level": extracted["level"],
+                    "embedding": extracted["embedding"],
+                    "raw_data": cand_payload.raw_data or cand_payload.model_dump()
+                }
 
-            saved, _ = save_or_update_candidate(cand_data)
-            _record_candidate_application_if_present(cand_payload.id, cand_payload, cand_data["status"], job_request_id)
-            saved = get_candidate_by_id(cand_payload.id)
-            recalculate_for_candidate(cand_payload.id)
-            logger.info(f"New candidate '{saved.get('name')}' (ID: {cand_payload.id}) added. Precalculated matches with all jobs.")
-            return saved, True
+                saved, _ = save_or_update_candidate(cand_data)
+                _record_candidate_application_if_present(cand_payload.id, cand_payload, cand_data["status"], job_request_id)
+                saved = get_candidate_by_id(cand_payload.id)
+                recalculate_for_candidate(cand_payload.id)
+                logger.info(f"New candidate '{saved.get('name')}' (ID: {cand_payload.id}) added. Precalculated matches with all jobs.")
+                return saved, True
     finally:
         _release_cv_download(cand_payload.id)
 
@@ -790,6 +830,25 @@ def get_candidate_matching_jobs(candidate_id: str, limit: int = Query(100, ge=1,
         "total_matches": len(jobs),
         "jobs": jobs
     }
+
+
+# ------------------------------------------
+# Status APIs
+# ------------------------------------------
+
+@app.get("/api/status/tasks")
+def get_active_tasks():
+    """Returns all currently in-progress backend tasks for the Status tab."""
+    import time as _time
+    now = _time.time()
+    with _active_tasks_guard:
+        tasks = []
+        for t in _active_tasks.values():
+            task_copy = dict(t)
+            task_copy["elapsed_seconds"] = round(now - t["started_at"], 1)
+            tasks.append(task_copy)
+    tasks.sort(key=lambda t: t["started_at"])
+    return {"tasks": tasks, "count": len(tasks)}
 
 
 # ------------------------------------------

@@ -100,7 +100,7 @@
   let isFetching = false;
 
   // Drawer Navigation State
-  let mainPage = 'jobs'; // 'jobs' | 'search' | 'settings'
+  let mainPage = 'jobs'; // 'jobs' | 'search' | 'status' | 'settings'
 
   // Backend Sync & Cache State
   let backendSyncStatus = { synced: false, time: null, error: null, count: 0, newCount: 0, updatedCount: 0 };
@@ -135,6 +135,11 @@
   let backendModelInfo = null;
   let backendHealthInfo = null;
   let isClearingDb = false;
+
+  // Status tab state
+  let statusTasks = [];
+  let isLoadingStatus = false;
+  let statusPollTimer = null;
 
   // DOM Elements inside Shadow Root
   let shadowRoot = null;
@@ -722,6 +727,89 @@
     `;
   }
 
+  /**
+   * Render the Status tab showing in-progress backend tasks
+   */
+  function renderStatusView() {
+    if (isLoadingStatus && statusTasks.length === 0) {
+      return `
+        <div class="hrm-ext-stack-lg hrm-ext-full-width">
+          <div class="hrm-ext-card">
+            <div class="hrm-ext-card-title">Backend Processing Status</div>
+            <div class="hrm-ext-status-loading">Loading...</div>
+          </div>
+        </div>
+      `;
+    }
+
+    const typeConfig = {
+      cv_download: { icon: '📥', label: 'CV Downloading', badgeClass: 'status-blue' },
+      cv_process:  { icon: '⚙️', label: 'CV Processing',  badgeClass: 'status-amber' },
+      job_process: { icon: '🔧', label: 'Job Processing', badgeClass: 'status-purple' },
+    };
+
+    let taskListHtml = '';
+    if (statusTasks.length === 0) {
+      taskListHtml = `
+        <div class="hrm-ext-status-empty">
+          <div class="hrm-ext-status-empty-icon">✅</div>
+          <div class="hrm-ext-status-empty-text">No active tasks</div>
+          <div class="hrm-ext-help-text">All backend processing is complete.</div>
+        </div>
+      `;
+    } else {
+      const grouped = {};
+      for (const task of statusTasks) {
+        const type = task.type || 'unknown';
+        if (!grouped[type]) grouped[type] = [];
+        grouped[type].push(task);
+      }
+
+      for (const [type, tasks] of Object.entries(grouped)) {
+        const cfg = typeConfig[type] || { icon: '❓', label: type, badgeClass: 'status-gray' };
+        taskListHtml += `
+          <div class="hrm-ext-status-group">
+            <div class="hrm-ext-status-group-header">
+              <span class="hrm-ext-status-group-icon">${cfg.icon}</span>
+              <span class="hrm-ext-section-label hrm-ext-section-label-caps">${escapeHtml(cfg.label)}</span>
+              <span class="hrm-ext-badge hrm-ext-badge-xs ${cfg.badgeClass}">${tasks.length}</span>
+            </div>
+            <div class="hrm-ext-status-group-items">
+              ${tasks.map(task => {
+                const elapsed = task.elapsed_seconds != null ? task.elapsed_seconds : 0;
+                const elapsedStr = elapsed >= 60
+                  ? Math.floor(elapsed / 60) + 'm ' + Math.floor(elapsed % 60) + 's'
+                  : Math.floor(elapsed) + 's';
+                return `
+                  <div class="hrm-ext-task-item">
+                    <div class="hrm-ext-task-item-dot ${cfg.badgeClass}"></div>
+                    <div class="hrm-ext-task-item-label">${escapeHtml(task.label || task.id)}</div>
+                    <div class="hrm-ext-task-item-elapsed">${elapsedStr}</div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      }
+    }
+
+    return `
+      <div class="hrm-ext-stack-lg hrm-ext-full-width">
+        <div class="hrm-ext-card">
+          <div class="hrm-ext-row-between">
+            <div class="hrm-ext-card-title">Backend Processing Status</div>
+            <button type="button" id="hrm-ext-status-refresh-btn" class="hrm-ext-sm-btn" ${isLoadingStatus ? 'disabled' : ''}>${isLoadingStatus ? '⟳' : '↻'} Refresh</button>
+          </div>
+          <div class="hrm-ext-help-text hrm-ext-mt-4">Shows in-progress tasks running on the backend. Auto-refreshes every 3 seconds.</div>
+          <div class="hrm-ext-status-list hrm-ext-mt-10">
+            ${taskListHtml}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   // 3. Backend Settings View
   function renderSettingsView() {
     const llm = backendModelInfo?.llm || {};
@@ -1132,6 +1220,8 @@
       pageContent = renderAllJobsView();
     } else if (mainPage === 'search') {
       pageContent = renderCandidateSearchView();
+    } else if (mainPage === 'status') {
+      pageContent = renderStatusView();
     } else if (mainPage === 'settings') {
       pageContent = renderSettingsView();
     }
@@ -1148,6 +1238,7 @@
           <div class="hrm-ext-main-nav">
             <button class="hrm-ext-nav-btn ${mainPage === 'jobs' ? 'active' : ''}" type="button" data-nav="jobs">All Jobs</button>
             <button class="hrm-ext-nav-btn ${mainPage === 'search' ? 'active' : ''}" type="button" data-nav="search">Search Candidates</button>
+            <button class="hrm-ext-nav-btn ${mainPage === 'status' ? 'active' : ''}" type="button" data-nav="status">Status</button>
             <button class="hrm-ext-nav-btn ${mainPage === 'settings' ? 'active' : ''}" type="button" data-nav="settings">Settings</button>
           </div>
           <div class="hrm-ext-page-container">${pageContent}</div>
@@ -1199,12 +1290,17 @@
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         mainPage = btn.dataset.nav;
+        if (btn.dataset.nav !== 'status') {
+          stopStatusPolling();
+        }
         if (mainPage === 'jobs') {
           selectedJob = null;
           selectedJobCandidates = [];
           loadBackendJobs(jobSearchQuery);
         } else if (mainPage === 'search' && !candidateSearchResults.length) {
           searchCandidates('');
+        } else if (mainPage === 'status') {
+          loadStatusTasks();
         } else if (mainPage === 'settings') {
           loadBackendModelInfo();
         }
@@ -1365,6 +1461,15 @@
         selectedCandidate = null;
         selectedCandidateJobs = [];
         updateDrawerContent();
+      });
+    }
+
+    // Status tab events
+    const statusRefreshBtn = container.querySelector('#hrm-ext-status-refresh-btn');
+    if (statusRefreshBtn) {
+      statusRefreshBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        loadStatusTasks();
       });
     }
 
@@ -1539,6 +1644,53 @@
     } finally {
       isLoadingCandidateJobs = false;
       updateDrawerContent();
+    }
+  }
+
+  /**
+   * Fetches active tasks from the backend status endpoint
+   */
+  async function loadStatusTasks() {
+    isLoadingStatus = true;
+    try {
+      const res = await fetch(`${getBackendUrl()}/api/status/tasks`);
+      if (res.ok) {
+        const data = await res.json();
+        statusTasks = data.tasks || [];
+      } else {
+        statusTasks = [];
+      }
+    } catch (e) {
+      statusTasks = [];
+    }
+    isLoadingStatus = false;
+    if (mainPage === 'status') {
+      updateDrawerContent();
+      startStatusPolling();
+    }
+  }
+
+  /**
+   * Starts polling for status updates every 3 seconds
+   */
+  function startStatusPolling() {
+    stopStatusPolling();
+    statusPollTimer = setInterval(() => {
+      if (mainPage === 'status') {
+        loadStatusTasks();
+      } else {
+        stopStatusPolling();
+      }
+    }, 3000);
+  }
+
+  /**
+   * Stops the status polling timer
+   */
+  function stopStatusPolling() {
+    if (statusPollTimer) {
+      clearInterval(statusPollTimer);
+      statusPollTimer = null;
     }
   }
 
